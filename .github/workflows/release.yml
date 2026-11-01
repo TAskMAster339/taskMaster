@@ -1,0 +1,188 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: taskmaster-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Windows executable
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run release checks
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { throw "cargo fmt failed" }
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "cargo test failed" }
+          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed" }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
+
+      - name: Require previous changelog archive to be merged
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $defaultBranch = "${{ github.event.repository.default_branch }}"
+          $pending = gh pr list --base $defaultBranch --state open --json title --jq '.[] | select(.title | startswith("docs: archive taskMaster ")) | .title'
+          if ($LASTEXITCODE -ne 0) { throw "Could not check previous changelog archive pull requests." }
+          if ($pending) { throw "Merge the previous changelog archive pull request before publishing another release: $pending" }
+
+      - name: Build Windows executable
+        run: npm run tauri -- build --no-bundle
+
+      - name: Prepare release notes and metadata
+        id: release
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -ne "${{ github.event.repository.default_branch }}") {
+            throw "Publish Release must be run from the repository default branch."
+          }
+
+          $cargoVersion = [regex]::Match((Get-Content src-tauri/Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          $tauriVersion = ([regex]::Match((Get-Content src-tauri/tauri.conf.json -Raw), '"version"\s*:\s*"([^"]+)"')).Groups[1].Value
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if (-not $cargoVersion -or $cargoVersion -ne $tauriVersion -or $cargoVersion -ne $packageVersion) {
+            throw "Version mismatch: Cargo=$cargoVersion, Tauri=$tauriVersion, package.json=$packageVersion"
+          }
+
+          $changelog = Get-Content CHANGELOG.md -Raw -Encoding utf8
+          $unreleased = [regex]::Match($changelog, '(?ms)^## \[Unreleased\]\r?\n(?<body>.*?)(?=^## \[|\z)')
+          if (-not $unreleased.Success) { throw "CHANGELOG.md must contain an Unreleased section." }
+          $notes = $unreleased.Groups['body'].Value.Trim()
+          if (-not ($notes -match '(?m)^- ')) { throw "CHANGELOG.md Unreleased section has no entries." }
+
+          $date = (Get-Date).ToUniversalTime().ToString('yyyy.MM.dd')
+          $run = $env:GITHUB_RUN_NUMBER
+          $tag = "v$($cargoVersion)-$date-$run"
+          $notesPath = Join-Path $env:RUNNER_TEMP 'taskmaster-release-notes.md'
+          Set-Content -Path $notesPath -Value $notes -Encoding utf8
+
+          "version=$cargoVersion" >> $env:GITHUB_OUTPUT
+          "date=$date" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
+
+      - name: Publish dated version release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_DATE: ${{ steps.release.outputs.date }}
+          RELEASE_NOTES: ${{ steps.release.outputs.notes_path }}
+        run: |
+          $binary = Resolve-Path 'src-tauri/target/release/taskmaster.exe'
+          $datedBinary = Join-Path $env:RUNNER_TEMP "taskMaster-$env:RELEASE_VERSION-windows-x64.exe"
+          Copy-Item -LiteralPath $binary -Destination $datedBinary
+          $title = "taskMaster $env:RELEASE_VERSION ($env:RELEASE_DATE)"
+
+          $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
+          if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
+          if ($releaseTags -contains $env:RELEASE_TAG) {
+            gh release upload $env:RELEASE_TAG $datedBinary --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not update dated release asset." }
+            gh release edit $env:RELEASE_TAG --title $title --notes-file $env:RELEASE_NOTES --latest=false
+          } else {
+            gh release create $env:RELEASE_TAG $datedBinary --title $title --notes-file $env:RELEASE_NOTES --latest=false
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish dated version release." }
+
+      - name: Update rolling latest release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_DATE: ${{ steps.release.outputs.date }}
+          RELEASE_NOTES: ${{ steps.release.outputs.notes_path }}
+        run: |
+          $binary = Resolve-Path 'src-tauri/target/release/taskmaster.exe'
+          $latestBinary = Join-Path $env:RUNNER_TEMP 'taskMaster-windows-x64.exe'
+          Copy-Item -LiteralPath $binary -Destination $latestBinary
+          $title = "taskMaster latest — $env:RELEASE_VERSION ($env:RELEASE_DATE)"
+
+          $latestRef = "$($env:GITHUB_SHA):refs/tags/latest"
+          git push --force origin $latestRef
+          if ($LASTEXITCODE -ne 0) { throw "Could not move the rolling latest git tag." }
+
+          $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
+          if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
+          if ($releaseTags -contains 'latest') {
+            gh release upload latest $latestBinary --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not upload executable to the latest release." }
+            gh release edit latest --title $title --notes-file $env:RELEASE_NOTES --latest
+          } else {
+            gh release create latest $latestBinary --title $title --notes-file $env:RELEASE_NOTES --latest
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not update the latest release." }
+
+      - name: Archive changelog entries after successful publication
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_DATE: ${{ steps.release.outputs.date }}
+        run: |
+          $path = 'CHANGELOG.md'
+          $changelog = Get-Content $path -Raw -Encoding utf8
+          $pattern = '(?ms)^## \[Unreleased\]\r?\n(?<body>.*?)(?=^## \[|\z)'
+          $match = [regex]::Match($changelog, $pattern)
+          if (-not $match.Success) { throw "CHANGELOG.md Unreleased section disappeared; refusing to archive." }
+          $notes = $match.Groups['body'].Value.Trim()
+          if (-not ($notes -match '(?m)^- ')) { throw "CHANGELOG.md Unreleased section is empty; refusing to archive." }
+
+          $replacement = "## [Unreleased]`n`n## [$env:RELEASE_VERSION] - $env:RELEASE_DATE`n`n$notes`n`n"
+          $updated = $changelog.Substring(0, $match.Index) + $replacement + $changelog.Substring($match.Index + $match.Length)
+          Set-Content -Path $path -Value $updated -Encoding utf8
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add CHANGELOG.md
+          git commit -m "docs: archive $env:RELEASE_VERSION changelog"
+          if ($LASTEXITCODE -ne 0) { throw "Could not commit archived changelog." }
+
+          $branch = "automation/archive-changelog-$env:RELEASE_VERSION-$env:RELEASE_DATE-$env:GITHUB_RUN_NUMBER"
+          git switch -c $branch
+          if ($LASTEXITCODE -ne 0) { throw "Could not create changelog archive branch." }
+          git push --force origin $branch
+          if ($LASTEXITCODE -ne 0) { throw "Could not push changelog archive branch." }
+
+          $defaultBranch = "${{ github.event.repository.default_branch }}"
+          $title = "docs: archive taskMaster $env:RELEASE_VERSION changelog"
+          $body = "Release $env:RELEASE_VERSION ($env:RELEASE_DATE) was published. This PR archives its notes and leaves the Unreleased section ready for the next changes."
+          $pullRequest = gh pr list --head $branch --state open --json number --jq '.[0].number'
+          if ($LASTEXITCODE -ne 0) { throw "Could not check for an existing changelog archive PR." }
+          if ($pullRequest) {
+            gh pr edit $pullRequest --title $title --body $body
+          } else {
+            gh pr create --base $defaultBranch --head $branch --title $title --body $body
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not open or update the changelog archive PR." }

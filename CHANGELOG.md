@@ -1,0 +1,11 @@
+# Changelog
+
+Все заметные изменения проекта фиксируются здесь. Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/).
+
+## [Unreleased]
+
+### Добавлено
+
+- Добавлены CI workflow для проверок Rust и frontend и ручная публикация Windows release в GitHub Releases.
+- Добавлен PowerShell-сценарий для сборки и запуска taskMaster.
+- Создан desktop MVP: локальная очередь задач с редактированием, завершением, восстановлением и ручной перестановкой.
