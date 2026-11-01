@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::Serialize;
-use tasks::{HistoryItem, Task, TaskStore};
+use tasks::{HistoryDay, Task, TaskStore};
 use tauri::{Manager, State};
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,8 +108,12 @@ fn archive_expired_tasks(state: State<'_, AppState>) -> Result<usize, AppError> 
 }
 
 #[tauri::command]
-fn list_history(state: State<'_, AppState>) -> Result<Vec<HistoryItem>, AppError> {
-    with_store(&state, TaskStore::list_history)
+fn list_history_for_range(
+    start: i64,
+    end: i64,
+    state: State<'_, AppState>,
+) -> Result<HistoryDay, AppError> {
+    with_store(&state, |store| store.list_history_for_range(start, end))
 }
 
 #[tauri::command]
@@ -151,7 +155,7 @@ pub fn run() {
             complete_task,
             reopen_task,
             archive_expired_tasks,
-            list_history,
+            list_history_for_range,
             restore_task
         ])
         .run(tauri::generate_context!())

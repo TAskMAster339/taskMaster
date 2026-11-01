@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-    time::SystemTime,
-};
+use std::{collections::HashSet, path::Path, time::SystemTime};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -44,19 +40,17 @@ pub struct Task {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TaskEvent {
-    pub id: String,
-    pub task_id: String,
-    pub kind: String,
+pub struct HistoryTask {
+    pub task: Task,
     pub occurred_at: i64,
-    pub details: serde_json::Value,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HistoryItem {
-    pub task: Task,
-    pub events: Vec<TaskEvent>,
+pub struct HistoryDay {
+    pub completed: Vec<HistoryTask>,
+    pub archived: Vec<HistoryTask>,
 }
 
 pub struct TaskStore {
@@ -340,57 +334,55 @@ impl TaskStore {
         transaction.commit().map_err(|_| AppError::storage())
     }
 
-    pub fn list_history(&self) -> Result<Vec<HistoryItem>, AppError> {
-        let mut tasks = self.list_tasks()?;
-        tasks.sort_by(|left, right| {
-            right
-                .created_at
-                .cmp(&left.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
+    pub fn list_history_for_range(&self, start: i64, end: i64) -> Result<HistoryDay, AppError> {
+        if start >= end {
+            return Err(AppError::invalid_state());
+        }
+        Ok(HistoryDay {
+            completed: self.list_history_kind("completed", start, end)?,
+            archived: self.list_history_kind("archived", start, end)?,
+        })
+    }
 
+    fn list_history_kind(
+        &self,
+        kind: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<HistoryTask>, AppError> {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, task_id, kind, occurred_at, details FROM task_events
-                 ORDER BY task_id, occurred_at ASC, id ASC",
+                "SELECT t.id, t.title, t.status, t.position, t.created_at, t.updated_at,
+                        t.completed_at, t.archived_at, MAX(e.occurred_at),
+                        COALESCE((SELECT MIN(created.occurred_at) FROM task_events created
+                                  WHERE created.task_id = t.id AND created.kind = 'created'), t.created_at)
+                 FROM task_events e JOIN tasks t ON t.id = e.task_id
+                 WHERE e.kind = ?1 AND e.occurred_at >= ?2 AND e.occurred_at < ?3
+                 GROUP BY t.id ORDER BY MAX(e.occurred_at) DESC, t.id",
             )
             .map_err(|_| AppError::storage())?;
         let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
+            .query_map(rusqlite::params![kind, start, end], |row| {
+                let status: String = row.get(2)?;
+                Ok(HistoryTask {
+                    task: Task {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        status: TaskStatus::parse(&status)?,
+                        position: row.get(3)?,
+                        created_at: row.get(4)?,
+                        updated_at: row.get(5)?,
+                        completed_at: row.get(6)?,
+                        archived_at: row.get(7)?,
+                    },
+                    occurred_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
             })
             .map_err(|_| AppError::storage())?;
-        let mut events_by_task: HashMap<String, Vec<TaskEvent>> = HashMap::new();
-        for row in rows {
-            let (id, task_id, kind, occurred_at, details) = row.map_err(|_| AppError::storage())?;
-            let details = serde_json::from_str(&details).map_err(|_| AppError::storage())?;
-            events_by_task
-                .entry(task_id.clone())
-                .or_default()
-                .push(TaskEvent {
-                    id,
-                    task_id,
-                    kind,
-                    occurred_at,
-                    details,
-                });
-        }
-        drop(statement);
-
-        tasks
-            .into_iter()
-            .map(|task| {
-                let events = events_by_task.remove(&task.id).unwrap_or_default();
-                Ok(HistoryItem { task, events })
-            })
-            .collect()
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| AppError::storage())
     }
 
     pub fn reorder_tasks(&self, ids: &[String]) -> Result<(), AppError> {
@@ -476,6 +468,15 @@ impl TaskStore {
         self.connection.query_row(
             "SELECT COUNT(*) FROM task_events WHERE kind = 'archived'",
             [],
+            |row| row.get(0),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn count_events_for_task(&self, task_id: &str, kind: &str) -> rusqlite::Result<i64> {
+        self.connection.query_row(
+            "SELECT COUNT(*) FROM task_events WHERE task_id = ?1 AND kind = ?2",
+            rusqlite::params![task_id, kind],
             |row| row.get(0),
         )
     }

@@ -18,17 +18,15 @@ interface Task {
   archivedAt: number | null;
 }
 
-interface TaskEvent {
-  id: string;
-  taskId: string;
-  kind: string;
+interface HistoryTask {
+  task: Task;
   occurredAt: number;
-  details: Record<string, unknown>;
+  createdAt: number;
 }
 
-interface HistoryItem {
-  task: Task;
-  events: TaskEvent[];
+interface HistoryDay {
+  completed: HistoryTask[];
+  archived: HistoryTask[];
 }
 
 interface BackendError {
@@ -52,13 +50,14 @@ const taskAnimationErrors: string[] = [];
 let announcement = "";
 let theme: Theme = readTheme();
 type View = "today" | "completed" | "history";
-type HistoryFilter = "all" | TaskStatus;
 let activeView: View = window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : "today";
-let history: HistoryItem[] = [];
+let historyDay: HistoryDay = { completed: [], archived: [] };
 let historyLoading = false;
-let historyLoaded = false;
 let historyQuery = "";
-let historyFilter: HistoryFilter = "all";
+const yesterday = new Date();
+yesterday.setDate(yesterday.getDate() - 1);
+let selectedHistoryDate = toLocalDateString(yesterday);
+let calendarMonth = monthStart(parseLocalDate(selectedHistoryDate));
 const enteringTaskIds = new Set<string>();
 
 function waitForMotion(milliseconds: number): Promise<void> {
@@ -230,12 +229,6 @@ function updateThemeButton(): void {
   button.querySelector(".theme-label")!.textContent = themeLabels[theme];
 }
 
-const dateLabel = new Intl.DateTimeFormat("ru-RU", {
-  weekday: "long",
-  day: "numeric",
-  month: "long",
-}).format(new Date());
-
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => {
     const entities: Record<string, string> = {
@@ -273,40 +266,67 @@ function isSameLocalDay(timestamp: number | null, date: Date): boolean {
     && taskDate.getDate() === date.getDate();
 }
 
-function visibleHistory(): HistoryItem[] {
+function toLocalDateString(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function parseLocalDate(value: string): Date {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year!, month! - 1, day!);
+}
+
+function monthStart(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function formatTime(timestamp: number): string {
+  return new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
+}
+
+function filteredDayTasks(items: HistoryTask[]): HistoryTask[] {
   const query = historyQuery.trim().toLocaleLowerCase("ru-RU");
-  return history.filter(({ task }) => (historyFilter === "all" || task.status === historyFilter)
-    && (!query || task.title.toLocaleLowerCase("ru-RU").includes(query)));
+  return items.filter(({ task }) => !query || task.title.toLocaleLowerCase("ru-RU").includes(query));
 }
 
-function formatTimestamp(timestamp: number): string {
-  return new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(new Date(timestamp));
+function renderCalendar(): string {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const first = monthStart(calendarMonth);
+  const dayOffset = (first.getDay() + 6) % 7;
+  const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const cells = `${"<span class=\"calendar-empty\" aria-hidden=\"true\"></span>".repeat(dayOffset)}${Array.from({ length: days }, (_, index) => {
+    const date = new Date(first.getFullYear(), first.getMonth(), index + 1);
+    const value = toLocalDateString(date);
+    const disabled = date >= todayStart;
+    return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat("ru-RU", { dateStyle: "full" }).format(date)}" ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}>${date.getDate()}</button>`;
+  }).join("")}`;
+  const nextMonthDisabled = first.getFullYear() === today.getFullYear() && first.getMonth() >= today.getMonth();
+  return `<section class="history-calendar" aria-label="Календарь истории">
+    <div class="calendar-heading"><button type="button" data-calendar-shift="-1" aria-label="Предыдущий месяц">←</button><h2>${new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(first)}</h2><button type="button" data-calendar-shift="1" aria-label="Следующий месяц" ${nextMonthDisabled ? "disabled" : ""}>→</button></div>
+    <div class="calendar-grid calendar-weekdays" aria-hidden="true">${["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => `<span>${day}</span>`).join("")}</div>
+    <div class="calendar-grid">${cells}</div>
+  </section>`;
 }
 
-const eventLabels: Record<string, string> = {
-  created: "Создана", renamed: "Переименована", reordered: "Перемещена в очереди",
-  completed: "Выполнена", reopened: "Возвращена в очередь", archived: "Архивирована", restored: "Восстановлена",
-  reminder_set: "Напоминание установлено", reminder_cleared: "Напоминание отменено",
-  focus_started: "Таймер запущен", focus_paused: "Таймер на паузе", focus_resumed: "Таймер продолжен",
-  focus_finished: "Фокус-сессия завершена", focus_cancelled: "Фокус-сессия отменена", deleted: "Удалена",
-};
+function renderHistoryColumn(title: string, items: HistoryTask[], type: "completed" | "archived"): string {
+  const visible = filteredDayTasks(items);
+  const list = historyLoading
+    ? `<li class="history-empty">Загружаем…</li>`
+    : visible.length
+      ? visible.map(({ task, occurredAt, createdAt }) => `<li class="history-task-row">
+          <span class="history-task-title">${escapeHtml(task.title)}</span>
+          <time>${formatTime(type === "completed" ? occurredAt : createdAt)}</time>
+          ${type === "archived" && task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}" aria-label="Восстановить задачу: ${escapeHtml(task.title)}">↶</button>` : ""}
+        </li>`).join("")
+      : `<li class="history-empty">${historyQuery ? "Задачи не найдены" : "Нет задач"}</li>`;
+  return `<section class="history-column history-column-${type}" aria-labelledby="history-${type}-title">
+    <div class="history-column-heading"><h2 id="history-${type}-title">${title}</h2><span>${visible.length}</span></div>
+    <ul class="history-task-list">${list}</ul>
+  </section>`;
+}
 
-function renderHistoryItems(): string {
-  if (historyLoading) return `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем историю…</span></div>`;
-  const items = visibleHistory();
-  if (!items.length) return `<div class="empty-state"><strong>${history.length ? "Задачи не найдены" : "История пока пуста"}</strong></div>`;
-  return `<ol class="history-list">${items.map(({ task, events }) => {
-    const statusLabel = task.status === "active" ? "Активна" : task.status === "completed" ? "Выполнена" : "Архив";
-    const timeline = events.map((event) => `<li><time datetime="${new Date(event.occurredAt).toISOString()}">${formatTimestamp(event.occurredAt)}</time><span>${escapeHtml(eventLabels[event.kind] ?? event.kind)}</span>${event.kind === "renamed" && typeof event.details.oldTitle === "string" && typeof event.details.newTitle === "string" ? `<small>${escapeHtml(event.details.oldTitle)} → ${escapeHtml(event.details.newTitle)}</small>` : ""}</li>`).join("");
-    return `<li class="history-entry">
-      <article aria-labelledby="history-task-${task.id}">
-        <div class="history-entry-heading"><h3 id="history-task-${task.id}">${escapeHtml(task.title)}</h3><span class="history-status is-${task.status}">${statusLabel}</span></div>
-        <dl class="history-meta"><div><dt>Создана</dt><dd>${formatTimestamp(task.createdAt)}</dd></div>${task.completedAt ? `<div><dt>Выполнена</dt><dd>${formatTimestamp(task.completedAt)}</dd></div>` : ""}${task.archivedAt ? `<div><dt>Архив</dt><dd>${formatTimestamp(task.archivedAt)}</dd></div>` : ""}</dl>
-        <details class="history-events"><summary>События (${events.length})</summary><ol>${timeline || "<li>Событий нет</li>"}</ol></details>
-        ${task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}">Восстановить в очередь</button>` : ""}
-      </article>
-    </li>`;
-  }).join("")}</ol>`;
+function renderHistoryLists(): string {
+  return `<div class="history-columns">${renderHistoryColumn("Выполнено", historyDay.completed, "completed")}${renderHistoryColumn("Архив", historyDay.archived, "archived")}</div>`;
 }
 
 function completedTodayTasks(): Task[] {
@@ -344,8 +364,11 @@ function render(allowDuringAnimation = false): void {
   const showingCompleted = activeView === "completed";
   const showingHistory = activeView === "history";
   const visibleTasks = showingToday ? active : completedToday;
+  const historyCount = filteredDayTasks(historyDay.completed).length + filteredDayTasks(historyDay.archived).length;
+  const headingDate = showingHistory ? parseLocalDate(selectedHistoryDate) : new Date();
+  const headingDateLabel = new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" }).format(headingDate);
   const taskList = showingHistory
-    ? renderHistoryItems()
+    ? renderHistoryLists()
     : loading
     ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем очередь…</span></div>`
     : visibleTasks.length
@@ -377,11 +400,11 @@ function render(allowDuringAnimation = false): void {
       <main class="main-content ${showingToday ? "is-today-view" : showingHistory ? "is-history-view" : "is-completed-view"}" id="${activeView}">
         <section class="day-heading" aria-labelledby="page-title">
           <div>
-            <p class="eyebrow">${escapeHtml(dateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date())}</p>
+            <p class="eyebrow">${escapeHtml(headingDateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(headingDate)}</p>
             <h1 id="page-title">${showingToday ? 'План на день<span class="heading-period">.</span>' : showingHistory ? 'История<span class="heading-period">.</span>' : 'Выполнено<span class="heading-period">.</span>'}</h1>
           </div>
-          <div class="day-progress" aria-label="${showingHistory ? "Задач в истории" : showingToday ? "Активных" : "Выполненных сегодня"} задач: ${showingHistory ? visibleHistory().length : visibleTasks.length}">
-            <span class="progress-count">${String(showingHistory ? visibleHistory().length : visibleTasks.length).padStart(2, "0")}</span>
+          <div class="day-progress" aria-label="${showingHistory ? "Задач за дату" : showingToday ? "Активных" : "Выполненных сегодня"} задач: ${showingHistory ? historyCount : visibleTasks.length}">
+            <span class="progress-count">${String(showingHistory ? historyCount : visibleTasks.length).padStart(2, "0")}</span>
           </div>
         </section>
 
@@ -390,22 +413,22 @@ function render(allowDuringAnimation = false): void {
             placeholder="Новая задача" aria-label="Название новой задачи" ${saving ? "disabled" : ""} />
           <kbd>ENTER <span aria-hidden="true">↵</span></kbd>
           <button class="add-button" type="submit" aria-label="Добавить задачу" ${saving ? "disabled" : ""}>＋</button>
-        </form>` : showingHistory ? `<div class="history-controls">
-          <label><span class="visually-hidden">Поиск по названию</span><input type="search" data-history-search placeholder="Поиск" value="${escapeHtml(historyQuery)}" /></label>
-          <label><span class="visually-hidden">Фильтр состояния</span><select data-history-filter aria-label="Фильтр истории"><option value="all" ${historyFilter === "all" ? "selected" : ""}>Все</option><option value="active" ${historyFilter === "active" ? "selected" : ""}>Активные</option><option value="completed" ${historyFilter === "completed" ? "selected" : ""}>Выполненные</option><option value="archived" ${historyFilter === "archived" ? "selected" : ""}>Архив</option></select></label>
-        </div>` : ""}
+        </form>` : ""}
+
+        ${showingHistory ? renderCalendar() : ""}
+        ${showingHistory ? `<div class="history-controls"><label><span class="visually-hidden">Поиск задач</span><input type="search" data-history-search placeholder="Поиск задач" value="${escapeHtml(historyQuery)}" /></label></div>` : ""}
 
         <p class="error-banner" role="alert" ${errorMessage ? "" : "hidden"}>
           <span aria-hidden="true">!</span> ${escapeHtml(errorMessage)}
         </p>
 
         <section class="queue-section" aria-labelledby="queue-title">
-          <div class="section-heading">
+          <div class="section-heading" ${showingHistory ? "hidden" : ""}>
             <div class="section-title-wrap">
-              <h2 id="queue-title">${showingHistory ? "Задачи" : showingToday ? "Очередь" : "Сегодня"}</h2>
+              <h2 id="queue-title">${showingToday ? "Очередь" : showingCompleted ? "Сегодня" : ""}</h2>
             </div>
           </div>
-          ${showingHistory ? `<div class="history-list-container">${taskList}</div>` : taskList}
+          ${showingHistory ? `<div class="history-list-container">${historyLoading ? '<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем список…</span></div>' : taskList}</div>` : taskList}
         </section>
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
@@ -437,10 +460,14 @@ async function refreshTasks(): Promise<void> {
 
 async function refreshHistory(): Promise<void> {
   historyLoading = true;
+  historyDay = { completed: [], archived: [] };
+  errorMessage = "";
   render(true);
   try {
-    history = await invoke<HistoryItem[]>("list_history");
-    historyLoaded = true;
+    const selected = parseLocalDate(selectedHistoryDate);
+    const start = selected.getTime();
+    const end = new Date(selected.getFullYear(), selected.getMonth(), selected.getDate() + 1).getTime();
+    historyDay = await invoke<HistoryDay>("list_history_for_range", { start, end });
     errorMessage = "";
   } catch (error) {
     errorMessage = backendMessage(error);
@@ -479,14 +506,14 @@ function bindEvents(): void {
       activeView = nextView;
       window.history.pushState(null, "", `#${activeView}`);
       render(true);
-      if (activeView === "history" && !historyLoaded) void refreshHistory();
+      if (activeView === "history") void refreshHistory();
     });
   });
 
   const updateHistoryResults = (): void => {
     const list = root.querySelector<HTMLElement>(".history-list-container");
-    if (list) list.innerHTML = renderHistoryItems();
-    const count = visibleHistory().length;
+    if (list) list.innerHTML = renderHistoryLists();
+    const count = filteredDayTasks(historyDay.completed).length + filteredDayTasks(historyDay.archived).length;
     const progressCount = root.querySelector<HTMLElement>(".progress-count");
     const progress = root.querySelector<HTMLElement>(".day-progress");
     if (progressCount) progressCount.textContent = String(count).padStart(2, "0");
@@ -496,9 +523,26 @@ function bindEvents(): void {
     historyQuery = (event.currentTarget as HTMLInputElement).value;
     updateHistoryResults();
   });
-  root.querySelector<HTMLSelectElement>("[data-history-filter]")?.addEventListener("change", (event) => {
-    historyFilter = (event.currentTarget as HTMLSelectElement).value as HistoryFilter;
-    updateHistoryResults();
+  root.querySelectorAll<HTMLButtonElement>("[data-calendar-date]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const value = button.dataset.calendarDate;
+      if (!value) return;
+      selectedHistoryDate = value;
+      calendarMonth = monthStart(parseLocalDate(value));
+      render(true);
+      void refreshHistory();
+    });
+  });
+  root.querySelectorAll<HTMLButtonElement>("[data-calendar-shift]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const shift = Number(button.dataset.calendarShift);
+      const target = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + shift, 1);
+      const today = new Date();
+      if (shift > 0 && (target.getFullYear() > today.getFullYear()
+        || (target.getFullYear() === today.getFullYear() && target.getMonth() > today.getMonth()))) return;
+      calendarMonth = target;
+      render(true);
+    });
   });
   root.querySelectorAll<HTMLButtonElement>("[data-restore-task]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -707,7 +751,7 @@ const syncViewFromHash = (): void => {
   if (nextView === activeView) return;
   activeView = nextView;
   render(true);
-  if (activeView === "history" && !historyLoaded) void refreshHistory();
+  if (activeView === "history") void refreshHistory();
 };
 window.addEventListener("popstate", syncViewFromHash);
 window.addEventListener("hashchange", syncViewFromHash);

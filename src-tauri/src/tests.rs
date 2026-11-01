@@ -273,30 +273,47 @@ fn restores_archived_task_to_queue_with_a_new_48_hour_window_and_history_event()
     assert_eq!(restored.archived_at, None);
     assert_eq!(tasks[0].id, active.id);
 
-    let history = store.list_history().unwrap();
-    let restored_history = history.iter().find(|item| item.task.id == old.id).unwrap();
-    assert!(
-        restored_history
-            .events
-            .iter()
-            .any(|event| event.kind == "restored")
-    );
-    assert!(
-        restored_history
-            .events
-            .iter()
-            .any(|event| event.kind == "archived")
-    );
-    let restored_event = restored_history
-        .events
-        .iter()
-        .find(|event| event.kind == "restored")
+    assert_eq!(store.count_events_for_task(&old.id, "restored").unwrap(), 1);
+    assert_eq!(store.count_events_for_task(&old.id, "archived").unwrap(), 1);
+}
+
+#[test]
+fn history_day_groups_completed_and_archived_tasks_by_event_time() {
+    let store = TaskStore::in_memory().unwrap();
+    let completed = store.create_task("Выполнена в выбранную дату").unwrap();
+    let archived = store.create_task("Архивирована в выбранную дату").unwrap();
+    let active = store.create_task("Остаётся активной").unwrap();
+    store.set_created_at(&archived.id, 1_000).unwrap();
+
+    store.complete_task(&completed.id).unwrap();
+    let completed_at = store
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|task| task.id == completed.id)
+        .unwrap()
+        .completed_at
         .unwrap();
-    assert_eq!(restored_event.details["previousCreatedAt"], 1_000);
+    let archived_at = completed_at + 10_000;
+    store.archive_expired_tasks(archived_at).unwrap();
+
+    let completion_day = store
+        .list_history_for_range(completed_at, archived_at)
+        .unwrap();
+    assert_eq!(completion_day.completed.len(), 1);
+    assert_eq!(completion_day.completed[0].task.id, completed.id);
+    assert!(completion_day.archived.is_empty());
+
+    let archive_day = store
+        .list_history_for_range(archived_at, archived_at + 1)
+        .unwrap();
+    assert_eq!(archive_day.archived.len(), 1);
+    assert_eq!(archive_day.archived[0].task.id, archived.id);
+    assert_eq!(archive_day.archived[0].occurred_at, archived_at);
     assert!(
-        restored_history
-            .events
-            .windows(2)
-            .all(|pair| pair[0].occurred_at <= pair[1].occurred_at)
+        !archive_day
+            .completed
+            .iter()
+            .any(|item| item.task.id == active.id)
     );
 }
