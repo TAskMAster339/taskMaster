@@ -1,7 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="174" height="36" viewBox="0 0 174 36" role="img" aria-label="taskMaster">
-  <circle cx="18" cy="18" r="15" fill="#20251a"/>
-  <path d="M10.5 18.5 15.5 23l10-11" fill="none" stroke="#c5ef5b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M43 11h3.2V8.4h4V11h4v3.1h-4v7.1c0 1.1.5 1.6 1.5 1.6.8 0 1.5-.2 2.3-.6v3.2c-1 .5-2.2.8-3.6.8-2.8 0-4.2-1.5-4.2-4.4v-7.7H43z" fill="#e9eae3"/>
-  <text x="58" y="25" fill="#e9eae3" font-family="Segoe UI,Arial,sans-serif" font-size="21" font-weight="750" letter-spacing="-1.1">ask</text>
-  <text x="92" y="25" fill="#c5ef5b" font-family="Segoe UI,Arial,sans-serif" font-size="21" font-weight="750" letter-spacing="-1.1">Master</text>
+  <circle cx="18" cy="18" r="14.5" fill="#23261f"/>
+  <path d="m11 18.5 4.5 4.2 9-10.2" fill="none" stroke="#b9dc50" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="42" y="25" fill="#23261f" font-family="Segoe UI,Arial,sans-serif" font-size="21" font-weight="750" letter-spacing="-1.1">task</text>
+  <text x="81" y="25" fill="#536d26" font-family="Segoe UI,Arial,sans-serif" font-size="21" font-weight="750" letter-spacing="-1.1">Master</text>
 </svg>

@@ -33,7 +33,8 @@ let errorMessage = "";
 let loadFailed = false;
 let editingTaskId: string | null = null;
 let mouseDragActive = false;
-let taskMotionLocked = false;
+const taskAnimationLocks = new Set<string>();
+const taskAnimationErrors: string[] = [];
 let announcement = "";
 let theme: Theme = readTheme();
 type View = "today" | "completed";
@@ -92,10 +93,9 @@ function animateEnteringTasks(): void {
 }
 
 async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button: HTMLButtonElement): Promise<void> {
-  if (saving || taskMotionLocked) return;
-  taskMotionLocked = true;
-  root.classList.add("is-task-motion-locked");
-  saving = true;
+  if (saving || taskAnimationLocks.has(task.id)) return;
+  taskAnimationLocks.add(task.id);
+  row.classList.add("is-task-animating");
   errorMessage = "";
   button.disabled = true;
   button.classList.add("checked", "is-checking");
@@ -119,28 +119,16 @@ async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button:
   });
   await waitForMotion(850);
 
-  try {
-    await invoke("complete_task", { id: task.id });
-    saving = false;
-    taskMotionLocked = false;
-    root.classList.remove("is-task-motion-locked");
-    await refreshTasks();
-  } catch (error) {
-    saving = false;
-    taskMotionLocked = false;
-    root.classList.remove("is-task-motion-locked");
-    errorMessage = backendMessage(error);
-    await refreshTasks();
-    errorMessage = backendMessage(error);
-    render();
-  }
+  let operationError: unknown;
+  try { await invoke("complete_task", { id: task.id }); }
+  catch (error) { operationError = error; }
+  await finishTaskAnimation(task.id, operationError);
 }
 
 async function reopenTaskWithAnimation(task: Task, row: HTMLLIElement, button: HTMLButtonElement): Promise<void> {
-  if (saving || taskMotionLocked) return;
-  taskMotionLocked = true;
-  root.classList.add("is-task-motion-locked");
-  saving = true;
+  if (saving || taskAnimationLocks.has(task.id)) return;
+  taskAnimationLocks.add(task.id);
+  row.classList.add("is-task-animating");
   button.disabled = true;
   button.classList.remove("checked");
   button.setAttribute("aria-pressed", "false");
@@ -161,19 +149,19 @@ async function reopenTaskWithAnimation(task: Task, row: HTMLLIElement, button: H
   });
   await waitForMotion(850);
 
-  try {
-    await invoke("reopen_task", { id: task.id });
-    saving = false;
-    taskMotionLocked = false;
-    root.classList.remove("is-task-motion-locked");
-    await refreshTasks();
-  } catch (error) {
-    saving = false;
-    taskMotionLocked = false;
-    root.classList.remove("is-task-motion-locked");
-    errorMessage = backendMessage(error);
-    await refreshTasks();
-    errorMessage = backendMessage(error);
+  let operationError: unknown;
+  try { await invoke("reopen_task", { id: task.id }); }
+  catch (error) { operationError = error; }
+  await finishTaskAnimation(task.id, operationError);
+}
+
+async function finishTaskAnimation(taskId: string, operationError?: unknown): Promise<void> {
+  taskAnimationLocks.delete(taskId);
+  if (operationError !== undefined) taskAnimationErrors.push(backendMessage(operationError));
+  if (taskAnimationLocks.size > 0) return;
+  await refreshTasks();
+  if (taskAnimationErrors.length) {
+    errorMessage = taskAnimationErrors.splice(0).join(" ");
     render();
   }
 }
@@ -284,7 +272,7 @@ function renderTask(task: Task, index: number, completed = false): string {
       <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
-        aria-pressed="${completed}" ${saving ? "disabled" : ""}>
+        aria-pressed="${completed}" ${saving || taskAnimationLocks.has(task.id) ? "disabled" : ""}>
         <span aria-hidden="true">${completed ? "✓" : ""}</span>
       </button>
       <div class="task-content">${title}</div>
@@ -292,6 +280,7 @@ function renderTask(task: Task, index: number, completed = false): string {
 }
 
 function render(): void {
+  if (taskAnimationLocks.size > 0) return;
   const previousPositions = captureTaskPositions();
   const active = activeTasks();
   const completedToday = completedTodayTasks();
@@ -459,7 +448,7 @@ function bindEvents(): void {
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.querySelector<HTMLElement>(".task-content")?.addEventListener("dblclick", () => {
-      if (saving || taskMotionLocked || editingTaskId === row.dataset.taskId) return;
+      if (saving || taskAnimationLocks.has(row.dataset.taskId ?? "") || editingTaskId === row.dataset.taskId) return;
       editingTaskId = row.dataset.taskId ?? null;
       errorMessage = "";
       render();
@@ -491,7 +480,7 @@ function bindEvents(): void {
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("mousedown", (event) => {
-      if (saving || taskMotionLocked) return;
+      if (saving || taskAnimationLocks.has(row.dataset.taskId ?? "")) return;
       if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button, input, a"))) return;
       const sourceId = row.dataset.taskId;
       if (!sourceId) return;
@@ -570,7 +559,7 @@ function bindEvents(): void {
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("keydown", (event) => {
-      if (saving || taskMotionLocked) return;
+      if (saving || taskAnimationLocks.has(row.dataset.taskId ?? "")) return;
       if (event.key === "F2") {
         event.preventDefault();
         editingTaskId = row.dataset.taskId ?? null;
