@@ -212,7 +212,11 @@ body.is-task-dragging { user-select: none; cursor: grabbing; }
   .main-content.is-history-view { grid-template-rows: auto minmax(80px, 1fr) auto auto; }
   .calendar-day, .calendar-empty { min-height: 39px; }
   .history-columns { display: flex; flex-direction: column; gap: 14px; }
-  .history-list-container { display: block; overflow-x: hidden; overflow-y: auto; }
+  .history-list-container { display: block; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--accent) var(--surface-soft); scrollbar-width: thin; }
+  .history-list-container::-webkit-scrollbar { width: 10px; }
+  .history-list-container::-webkit-scrollbar-track { margin-block: 3px; background: var(--surface-soft); }
+  .history-list-container::-webkit-scrollbar-thumb { border: 2px solid var(--surface-soft); background: var(--obi); }
+  .history-list-container::-webkit-scrollbar-button { display: none; }
   .history-column { min-height: auto; overflow: visible; }
   .history-task-list { min-height: auto; flex: 0 0 auto; overflow: visible; }
 }
