@@ -201,12 +201,6 @@ function applyTheme(): void {
   const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
   document.documentElement.dataset.themeMode = theme;
-  root.querySelector<HTMLImageElement>(".brand-logo")?.setAttribute("src", logoSource());
-}
-
-function logoSource(): string {
-  const mode = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-  return `/assets/taskmaster-logo-${mode}.svg?v=2`;
 }
 
 function updateThemeButton(): void {
@@ -310,7 +304,6 @@ function render(allowDuringAnimation = false): void {
   root.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar" aria-label="taskMaster">
-        <a class="brand" href="#today" aria-label="taskMaster — Сегодня"><img class="brand-logo" src="${logoSource()}" alt="" /></a>
         <nav class="navigation" aria-label="Разделы">
           <a class="nav-item ${showingToday ? "is-current" : ""}" href="#today" data-view="today" ${showingToday ? 'aria-current="page"' : ""}><span class="nav-index">01</span>Сегодня<span class="nav-count">${active.length}</span></a>
           <a class="nav-item ${showingToday ? "" : "is-current"}" href="#completed" data-view="completed" ${showingToday ? "" : 'aria-current="page"'}><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedToday.length}</span></a>
