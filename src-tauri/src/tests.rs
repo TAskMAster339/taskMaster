@@ -181,7 +181,7 @@ fn rejects_incomplete_or_duplicate_reorder_without_changing_the_queue() {
 }
 
 #[test]
-fn archives_tasks_at_the_48_hour_creation_deadline_and_only_once() {
+fn archives_tasks_at_the_24_hour_creation_deadline_and_only_once() {
     let store = TaskStore::in_memory().unwrap();
     let active = store.create_task("Активная").unwrap();
     let completed = store.create_task("Выполненная").unwrap();
@@ -189,8 +189,8 @@ fn archives_tasks_at_the_48_hour_creation_deadline_and_only_once() {
     store.set_created_at(&completed.id, 2_000).unwrap();
     store.complete_task(&completed.id).unwrap();
 
-    const FORTY_EIGHT_HOURS_MS: i64 = 48 * 60 * 60 * 1000;
-    let deadline = 1_000 + FORTY_EIGHT_HOURS_MS;
+    const TWENTY_FOUR_HOURS_MS: i64 = 24 * 60 * 60 * 1000;
+    let deadline = 1_000 + TWENTY_FOUR_HOURS_MS;
 
     assert_eq!(store.archive_expired_tasks(deadline - 1).unwrap(), 0);
     assert_eq!(store.archive_expired_tasks(deadline).unwrap(), 1);
@@ -388,13 +388,13 @@ fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
 }
 
 #[test]
-fn restores_archived_task_to_queue_with_a_new_48_hour_window_and_history_event() {
+fn restores_archived_task_to_queue_with_a_new_24_hour_window_and_history_event() {
     let store = TaskStore::in_memory().unwrap();
     let old = store.create_task("Старая задача").unwrap();
     let active = store.create_task("Остаётся в очереди").unwrap();
     store.set_created_at(&old.id, 1_000).unwrap();
     store
-        .archive_expired_tasks(1_000 + 48 * 60 * 60 * 1000)
+        .archive_expired_tasks(1_000 + 24 * 60 * 60 * 1000)
         .unwrap();
 
     store.restore_task(&old.id).unwrap();
@@ -403,7 +403,7 @@ fn restores_archived_task_to_queue_with_a_new_48_hour_window_and_history_event()
     let restored = tasks.iter().find(|task| task.id == old.id).unwrap();
     assert_eq!(restored.status, TaskStatus::Active);
     assert_eq!(restored.position, 1);
-    assert!(restored.created_at > 1_000 + 48 * 60 * 60 * 1000);
+    assert!(restored.created_at > 1_000 + 24 * 60 * 60 * 1000);
     assert_eq!(restored.archived_at, None);
     assert_eq!(tasks[0].id, active.id);
 

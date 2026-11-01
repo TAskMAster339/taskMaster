@@ -746,7 +746,7 @@ impl TaskStore {
     }
 
     pub fn archive_expired_tasks(&self, now: i64) -> Result<usize, AppError> {
-        const RETENTION_MS: i64 = 48 * 60 * 60 * 1000;
+        const RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
         let cutoff = now.saturating_sub(RETENTION_MS);
         let transaction = self
             .connection
