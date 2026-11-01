@@ -11,6 +11,7 @@ use crate::AppError;
 pub enum TaskStatus {
     Active,
     Completed,
+    Archived,
 }
 
 impl TaskStatus {
@@ -18,6 +19,7 @@ impl TaskStatus {
         match value {
             "active" => Ok(Self::Active),
             "completed" => Ok(Self::Completed),
+            "archived" => Ok(Self::Archived),
             _ => Err(rusqlite::Error::InvalidQuery),
         }
     }
@@ -33,6 +35,7 @@ pub struct Task {
     pub created_at: i64,
     pub updated_at: i64,
     pub completed_at: Option<i64>,
+    pub archived_at: Option<i64>,
 }
 
 pub struct TaskStore {
@@ -53,7 +56,7 @@ impl TaskStore {
     fn from_connection(connection: Connection) -> rusqlite::Result<Self> {
         let schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !(0..=1).contains(&schema_version) {
+        if !(0..=2).contains(&schema_version) {
             return Err(rusqlite::Error::InvalidQuery);
         }
 
@@ -83,6 +86,32 @@ impl TaskStore {
             )?;
             transaction.commit()?;
         }
+        let migrated_version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if migrated_version == 1 {
+            connection.execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 BEGIN;
+                 CREATE TABLE tasks_new (
+                     id TEXT PRIMARY KEY NOT NULL,
+                     title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 300),
+                     status TEXT NOT NULL CHECK(status IN ('active', 'completed', 'archived')),
+                     position INTEGER NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     completed_at INTEGER,
+                     archived_at INTEGER
+                 );
+                 INSERT INTO tasks_new (id, title, status, position, created_at, updated_at, completed_at)
+                     SELECT id, title, status, position, created_at, updated_at, completed_at FROM tasks;
+                 DROP TABLE tasks;
+                 ALTER TABLE tasks_new RENAME TO tasks;
+                 CREATE INDEX tasks_status_position ON tasks(status, position);
+                 PRAGMA user_version = 2;
+                 COMMIT;
+                 PRAGMA foreign_keys = ON;",
+            )?;
+        }
         Ok(Self { connection })
     }
 
@@ -90,7 +119,7 @@ impl TaskStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, title, status, position, created_at, updated_at, completed_at
+                "SELECT id, title, status, position, created_at, updated_at, completed_at, archived_at
                  FROM tasks
                  ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,
                           CASE WHEN status = 'active' THEN position END ASC,
@@ -108,6 +137,7 @@ impl TaskStore {
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
                     completed_at: row.get(6)?,
+                    archived_at: row.get(7)?,
                 })
             })
             .map_err(|_| AppError::storage())?;
@@ -137,6 +167,7 @@ impl TaskStore {
             created_at: now,
             updated_at: now,
             completed_at: None,
+            archived_at: None,
         };
         transaction
             .execute(
@@ -291,6 +322,53 @@ impl TaskStore {
             }
         }
         transaction.commit().map_err(|_| AppError::storage())
+    }
+
+    pub fn archive_expired_tasks(&self, now: i64) -> Result<usize, AppError> {
+        const RETENTION_MS: i64 = 48 * 60 * 60 * 1000;
+        let cutoff = now.saturating_sub(RETENTION_MS);
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let mut statement = transaction.prepare(
+            "SELECT id FROM tasks WHERE status IN ('active', 'completed') AND created_at <= ?1 ORDER BY created_at, id",
+        ).map_err(|_| AppError::storage())?;
+        let ids = statement
+            .query_map([cutoff], |row| row.get::<_, String>(0))
+            .map_err(|_| AppError::storage())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| AppError::storage())?;
+        drop(statement);
+
+        for id in &ids {
+            transaction.execute(
+                "UPDATE tasks SET status = 'archived', archived_at = ?1, updated_at = ?1 WHERE id = ?2",
+                params![now, id],
+            ).map_err(|_| AppError::storage())?;
+            record_event(&transaction, id, "archived", now, &serde_json::json!({}))?;
+        }
+        compact_active_positions(&transaction)?;
+        transaction.commit().map_err(|_| AppError::storage())?;
+        Ok(ids.len())
+    }
+
+    #[cfg(test)]
+    pub fn count_archive_events(&self) -> rusqlite::Result<i64> {
+        self.connection.query_row(
+            "SELECT COUNT(*) FROM task_events WHERE kind = 'archived'",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn set_created_at(&self, id: &str, created_at: i64) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE tasks SET created_at = ?1 WHERE id = ?2",
+            params![created_at, id],
+        )?;
+        Ok(())
     }
 }
 

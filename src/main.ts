@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-type TaskStatus = "active" | "completed";
+type TaskStatus = "active" | "completed" | "archived";
 type Theme = "system" | "dark" | "light";
 
 const themeStorageKey = "taskmaster.theme";
@@ -15,6 +15,7 @@ interface Task {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+  archivedAt: number | null;
 }
 
 interface BackendError {
@@ -606,3 +607,12 @@ window.addEventListener("popstate", syncViewFromHash);
 window.addEventListener("hashchange", syncViewFromHash);
 render();
 void refreshTasks();
+window.setInterval(async () => {
+  try {
+    const archived = await invoke<number>("archive_expired_tasks");
+    if (archived > 0) await refreshTasks();
+  } catch (error) {
+    errorMessage = backendMessage(error);
+    render();
+  }
+}, 60_000);

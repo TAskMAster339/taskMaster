@@ -179,3 +179,76 @@ fn rejects_incomplete_or_duplicate_reorder_without_changing_the_queue() {
     assert_eq!(tasks[0].id, first.id);
     assert_eq!(tasks[1].id, second.id);
 }
+
+#[test]
+fn archives_tasks_at_the_48_hour_creation_deadline_and_only_once() {
+    let store = TaskStore::in_memory().unwrap();
+    let active = store.create_task("Активная").unwrap();
+    let completed = store.create_task("Выполненная").unwrap();
+    store.set_created_at(&active.id, 1_000).unwrap();
+    store.set_created_at(&completed.id, 2_000).unwrap();
+    store.complete_task(&completed.id).unwrap();
+
+    const FORTY_EIGHT_HOURS_MS: i64 = 48 * 60 * 60 * 1000;
+    let deadline = 1_000 + FORTY_EIGHT_HOURS_MS;
+
+    assert_eq!(store.archive_expired_tasks(deadline - 1).unwrap(), 0);
+    assert_eq!(store.archive_expired_tasks(deadline).unwrap(), 1);
+    assert_eq!(store.archive_expired_tasks(deadline + 1_000).unwrap(), 1);
+    assert_eq!(store.archive_expired_tasks(deadline + 1).unwrap(), 0);
+
+    let tasks = store.list_tasks().unwrap();
+    assert!(tasks.iter().all(|task| task.status == TaskStatus::Archived));
+    assert_eq!(store.count_archive_events().unwrap(), 2);
+}
+
+#[test]
+fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
+    let database = TemporaryDatabase::new();
+    let connection = Connection::open(&database.0).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE tasks (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 300),
+                 status TEXT NOT NULL CHECK(status IN ('active', 'completed')),
+                 position INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 completed_at INTEGER
+             );
+             CREATE TABLE task_events (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 kind TEXT NOT NULL,
+                 occurred_at INTEGER NOT NULL,
+                 details TEXT NOT NULL DEFAULT '{}'
+             );
+             CREATE INDEX tasks_status_position ON tasks(status, position);
+             CREATE INDEX task_events_task_time ON task_events(task_id, occurred_at);
+             INSERT INTO tasks VALUES ('task-1', 'Сохранённая', 'active', 0, 1000, 1000, NULL);
+             INSERT INTO task_events VALUES ('event-1', 'task-1', 'created', 1000, '{}');
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = TaskStore::open(&database.0).unwrap();
+    let tasks = store.list_tasks().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].title, "Сохранённая");
+    assert_eq!(tasks[0].archived_at, None);
+    assert_eq!(store.count_archive_events().unwrap(), 0);
+
+    let connection = Connection::open(&database.0).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    let violations: i64 = connection
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, 2);
+    assert_eq!(violations, 0);
+}

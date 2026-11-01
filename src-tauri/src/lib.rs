@@ -96,9 +96,27 @@ fn reopen_task(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
     with_store(&state, |store| store.reopen_task(&id))
 }
 
+#[tauri::command]
+fn archive_expired_tasks(state: State<'_, AppState>) -> Result<usize, AppError> {
+    with_store(&state, |store| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        store.archive_expired_tasks(now)
+    })
+}
+
 fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
     std::fs::create_dir_all(&path).map_err(|_| AppError::storage())?;
-    TaskStore::open(path.join("taskmaster.sqlite3")).map_err(|_| AppError::storage())
+    let store =
+        TaskStore::open(path.join("taskmaster.sqlite3")).map_err(|_| AppError::storage())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    store.archive_expired_tasks(now)?;
+    Ok(store)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -121,7 +139,8 @@ pub fn run() {
             rename_task,
             reorder_tasks,
             complete_task,
-            reopen_task
+            reopen_task,
+            archive_expired_tasks
         ])
         .run(tauri::generate_context!())
         .expect("failed to run taskMaster");
