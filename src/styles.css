@@ -175,8 +175,6 @@ body.is-task-dragging { user-select: none; cursor: grabbing; }
 .calendar-day:hover:not(:disabled) { border-color: var(--obi); color: var(--obi); }
 .calendar-day.is-selected { border-color: var(--obi); color: var(--white); background: var(--obi); }
 .calendar-day.is-selected:hover:not(:disabled) { border-color: var(--obi); color: var(--white); background: var(--obi); }
-.calendar-day.is-today::before { position: absolute; inset: 4px; border: 1px solid var(--obi); content: ""; pointer-events: none; }
-.calendar-day.is-selected.is-today::before { border-color: var(--white); }
 .calendar-day.has-tasks::after { position: absolute; bottom: 4px; left: calc(50% - 2px); width: 4px; height: 4px; background: var(--obi); content: ""; }
 .calendar-day.has-tasks.is-selected::after { background: var(--white); }
 .calendar-day:disabled { color: var(--quiet); opacity: .48; cursor: default; }
