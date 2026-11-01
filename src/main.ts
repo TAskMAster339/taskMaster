@@ -5,7 +5,7 @@ type Theme = "system" | "dark" | "light";
 
 const themeStorageKey = "taskmaster.theme";
 const themeOrder: Theme[] = ["system", "dark", "light"];
-const themeLabels: Record<Theme, string> = { system: "Система", dark: "Тёмная", light: "Светлая" };
+const themeLabels: Record<Theme, string> = { system: "Системная", dark: "Тёмная", light: "Светлая" };
 
 interface Task {
   id: string;
@@ -33,6 +33,7 @@ let errorMessage = "";
 let loadFailed = false;
 let editingTaskId: string | null = null;
 let mouseDragActive = false;
+let taskMotionLocked = false;
 let announcement = "";
 let theme: Theme = readTheme();
 type View = "today" | "completed";
@@ -91,7 +92,9 @@ function animateEnteringTasks(): void {
 }
 
 async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button: HTMLButtonElement): Promise<void> {
-  if (saving) return;
+  if (saving || taskMotionLocked) return;
+  taskMotionLocked = true;
+  root.classList.add("is-task-motion-locked");
   saving = true;
   errorMessage = "";
   button.disabled = true;
@@ -119,9 +122,55 @@ async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button:
   try {
     await invoke("complete_task", { id: task.id });
     saving = false;
+    taskMotionLocked = false;
+    root.classList.remove("is-task-motion-locked");
     await refreshTasks();
   } catch (error) {
     saving = false;
+    taskMotionLocked = false;
+    root.classList.remove("is-task-motion-locked");
+    errorMessage = backendMessage(error);
+    await refreshTasks();
+    errorMessage = backendMessage(error);
+    render();
+  }
+}
+
+async function reopenTaskWithAnimation(task: Task, row: HTMLLIElement, button: HTMLButtonElement): Promise<void> {
+  if (saving || taskMotionLocked) return;
+  taskMotionLocked = true;
+  root.classList.add("is-task-motion-locked");
+  saving = true;
+  button.disabled = true;
+  button.classList.remove("checked");
+  button.setAttribute("aria-pressed", "false");
+  button.setAttribute("aria-label", `Вернуть в очередь — ${task.title}`);
+  const mark = button.querySelector<HTMLElement>("span");
+  if (mark) mark.textContent = "";
+  row.classList.add("is-restoring");
+
+  await waitForMotion(350);
+  const height = row.getBoundingClientRect().height;
+  row.style.height = `${height}px`;
+  row.style.overflow = "hidden";
+  requestAnimationFrame(() => {
+    row.classList.add("is-collapsing");
+    row.style.height = "0px";
+    row.style.paddingBlock = "0px";
+    row.style.borderBottomWidth = "0px";
+  });
+  await waitForMotion(850);
+
+  try {
+    await invoke("reopen_task", { id: task.id });
+    saving = false;
+    taskMotionLocked = false;
+    root.classList.remove("is-task-motion-locked");
+    await refreshTasks();
+  } catch (error) {
+    saving = false;
+    taskMotionLocked = false;
+    root.classList.remove("is-task-motion-locked");
     errorMessage = backendMessage(error);
     await refreshTasks();
     errorMessage = backendMessage(error);
@@ -232,7 +281,7 @@ function renderTask(task: Task, index: number, completed = false): string {
 
   return `
     <li class="task-row ${completed ? "is-completed" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
-      ${completed ? "" : `<span class="task-position" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>`}
+      <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
         aria-pressed="${completed}" ${saving ? "disabled" : ""}>
@@ -266,13 +315,13 @@ function render(): void {
   root.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar" aria-label="taskMaster">
-        <a class="brand" href="#today" aria-label="taskMaster — Сегодня">task<span>Master</span></a>
+        <a class="brand" href="#today" aria-label="taskMaster — Сегодня"><img class="brand-logo brand-logo--dark" src="/assets/taskmaster-logo-dark.svg" alt="" /><img class="brand-logo brand-logo--light" src="/assets/taskmaster-logo-light.svg" alt="" /></a>
         <nav class="navigation" aria-label="Разделы">
           <a class="nav-item ${showingToday ? "is-current" : ""}" href="#today" data-view="today" ${showingToday ? 'aria-current="page"' : ""}><span class="nav-index">01</span>Сегодня<span class="nav-count">${active.length}</span></a>
           <a class="nav-item ${showingToday ? "" : "is-current"}" href="#completed" data-view="completed" ${showingToday ? "" : 'aria-current="page"'}><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedToday.length}</span></a>
         </nav>
         <button class="theme-switch" type="button" data-theme-switch aria-label="Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить">
-          <span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy">Тема <span class="theme-label">${themeLabels[theme]}</span></span>
+          <span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy"><span class="theme-label">${themeLabels[theme]}</span></span>
         </button>
       </aside>
 
@@ -402,14 +451,15 @@ function bindEvents(): void {
         const row = button.closest<HTMLLIElement>(".task-row");
         if (row) void completeTaskWithAnimation(task, row, button);
       } else {
-        void perform(() => invoke("reopen_task", { id: task.id }));
+        const row = button.closest<HTMLLIElement>(".task-row");
+        if (row) void reopenTaskWithAnimation(task, row, button);
       }
     });
   });
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.querySelector<HTMLElement>(".task-content")?.addEventListener("dblclick", () => {
-      if (editingTaskId === row.dataset.taskId) return;
+      if (saving || taskMotionLocked || editingTaskId === row.dataset.taskId) return;
       editingTaskId = row.dataset.taskId ?? null;
       errorMessage = "";
       render();
@@ -441,6 +491,7 @@ function bindEvents(): void {
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("mousedown", (event) => {
+      if (saving || taskMotionLocked) return;
       if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button, input, a"))) return;
       const sourceId = row.dataset.taskId;
       if (!sourceId) return;
@@ -519,6 +570,7 @@ function bindEvents(): void {
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("keydown", (event) => {
+      if (saving || taskMotionLocked) return;
       if (event.key === "F2") {
         event.preventDefault();
         editingTaskId = row.dataset.taskId ?? null;
