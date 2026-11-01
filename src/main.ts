@@ -18,6 +18,19 @@ interface Task {
   archivedAt: number | null;
 }
 
+interface TaskEvent {
+  id: string;
+  taskId: string;
+  kind: string;
+  occurredAt: number;
+  details: Record<string, unknown>;
+}
+
+interface HistoryItem {
+  task: Task;
+  events: TaskEvent[];
+}
+
 interface BackendError {
   code?: string;
   message?: string;
@@ -38,8 +51,14 @@ const taskAnimationLocks = new Set<string>();
 const taskAnimationErrors: string[] = [];
 let announcement = "";
 let theme: Theme = readTheme();
-type View = "today" | "completed";
-let activeView: View = window.location.hash === "#completed" ? "completed" : "today";
+type View = "today" | "completed" | "history";
+type HistoryFilter = "all" | TaskStatus;
+let activeView: View = window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : "today";
+let history: HistoryItem[] = [];
+let historyLoading = false;
+let historyLoaded = false;
+let historyQuery = "";
+let historyFilter: HistoryFilter = "all";
 const enteringTaskIds = new Set<string>();
 
 function waitForMotion(milliseconds: number): Promise<void> {
@@ -254,6 +273,42 @@ function isSameLocalDay(timestamp: number | null, date: Date): boolean {
     && taskDate.getDate() === date.getDate();
 }
 
+function visibleHistory(): HistoryItem[] {
+  const query = historyQuery.trim().toLocaleLowerCase("ru-RU");
+  return history.filter(({ task }) => (historyFilter === "all" || task.status === historyFilter)
+    && (!query || task.title.toLocaleLowerCase("ru-RU").includes(query)));
+}
+
+function formatTimestamp(timestamp: number): string {
+  return new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(new Date(timestamp));
+}
+
+const eventLabels: Record<string, string> = {
+  created: "Создана", renamed: "Переименована", reordered: "Перемещена в очереди",
+  completed: "Выполнена", reopened: "Возвращена в очередь", archived: "Архивирована", restored: "Восстановлена",
+  reminder_set: "Напоминание установлено", reminder_cleared: "Напоминание отменено",
+  focus_started: "Таймер запущен", focus_paused: "Таймер на паузе", focus_resumed: "Таймер продолжен",
+  focus_finished: "Фокус-сессия завершена", focus_cancelled: "Фокус-сессия отменена", deleted: "Удалена",
+};
+
+function renderHistoryItems(): string {
+  if (historyLoading) return `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем историю…</span></div>`;
+  const items = visibleHistory();
+  if (!items.length) return `<div class="empty-state"><strong>${history.length ? "Задачи не найдены" : "История пока пуста"}</strong></div>`;
+  return `<ol class="history-list">${items.map(({ task, events }) => {
+    const statusLabel = task.status === "active" ? "Активна" : task.status === "completed" ? "Выполнена" : "Архив";
+    const timeline = events.map((event) => `<li><time datetime="${new Date(event.occurredAt).toISOString()}">${formatTimestamp(event.occurredAt)}</time><span>${escapeHtml(eventLabels[event.kind] ?? event.kind)}</span>${event.kind === "renamed" && typeof event.details.oldTitle === "string" && typeof event.details.newTitle === "string" ? `<small>${escapeHtml(event.details.oldTitle)} → ${escapeHtml(event.details.newTitle)}</small>` : ""}</li>`).join("");
+    return `<li class="history-entry">
+      <article aria-labelledby="history-task-${task.id}">
+        <div class="history-entry-heading"><h3 id="history-task-${task.id}">${escapeHtml(task.title)}</h3><span class="history-status is-${task.status}">${statusLabel}</span></div>
+        <dl class="history-meta"><div><dt>Создана</dt><dd>${formatTimestamp(task.createdAt)}</dd></div>${task.completedAt ? `<div><dt>Выполнена</dt><dd>${formatTimestamp(task.completedAt)}</dd></div>` : ""}${task.archivedAt ? `<div><dt>Архив</dt><dd>${formatTimestamp(task.archivedAt)}</dd></div>` : ""}</dl>
+        <details class="history-events"><summary>События (${events.length})</summary><ol>${timeline || "<li>Событий нет</li>"}</ol></details>
+        ${task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}">Восстановить в очередь</button>` : ""}
+      </article>
+    </li>`;
+  }).join("")}</ol>`;
+}
+
 function completedTodayTasks(): Task[] {
   const today = new Date();
   return completedTasks().filter((task) => isSameLocalDay(task.completedAt, today));
@@ -286,8 +341,12 @@ function render(allowDuringAnimation = false): void {
   const active = activeTasks();
   const completedToday = completedTodayTasks();
   const showingToday = activeView === "today";
+  const showingCompleted = activeView === "completed";
+  const showingHistory = activeView === "history";
   const visibleTasks = showingToday ? active : completedToday;
-  const taskList = loading
+  const taskList = showingHistory
+    ? renderHistoryItems()
+    : loading
     ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем очередь…</span></div>`
     : visibleTasks.length
       ? `<ol class="task-list ${showingToday ? "" : "completed-list"}" aria-label="${showingToday ? "Очередь задач" : "Выполненные сегодня задачи"}">${visibleTasks.map((task, index) => renderTask(task, index, !showingToday)).join("")}</ol>`
@@ -307,21 +366,22 @@ function render(allowDuringAnimation = false): void {
       <aside class="sidebar" aria-label="taskMaster">
         <nav class="navigation" aria-label="Разделы">
           <a class="nav-item ${showingToday ? "is-current" : ""}" href="#today" data-view="today" ${showingToday ? 'aria-current="page"' : ""}><span class="nav-index">01</span>Сегодня<span class="nav-count">${active.length}</span></a>
-          <a class="nav-item ${showingToday ? "" : "is-current"}" href="#completed" data-view="completed" ${showingToday ? "" : 'aria-current="page"'}><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedToday.length}</span></a>
+          <a class="nav-item ${showingCompleted ? "is-current" : ""}" href="#completed" data-view="completed" ${showingCompleted ? 'aria-current="page"' : ""}><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedToday.length}</span></a>
+          <a class="nav-item ${showingHistory ? "is-current" : ""}" href="#history" data-view="history" ${showingHistory ? 'aria-current="page"' : ""}><span class="nav-index">03</span>История</a>
         </nav>
         <button class="theme-switch" type="button" data-theme-switch aria-label="Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить">
           <span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy"><span class="theme-label">${themeLabels[theme]}</span></span>
         </button>
       </aside>
 
-      <main class="main-content ${showingToday ? "is-today-view" : "is-completed-view"}" id="${showingToday ? "today" : "completed"}">
+      <main class="main-content ${showingToday ? "is-today-view" : showingHistory ? "is-history-view" : "is-completed-view"}" id="${activeView}">
         <section class="day-heading" aria-labelledby="page-title">
           <div>
             <p class="eyebrow">${escapeHtml(dateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date())}</p>
-            <h1 id="page-title">${showingToday ? 'План на день<span class="heading-period">.</span>' : 'Выполнено<span class="heading-period">.</span>'}</h1>
+            <h1 id="page-title">${showingToday ? 'План на день<span class="heading-period">.</span>' : showingHistory ? 'История<span class="heading-period">.</span>' : 'Выполнено<span class="heading-period">.</span>'}</h1>
           </div>
-          <div class="day-progress" aria-label="${showingToday ? "Активных" : "Выполненных сегодня"} задач: ${visibleTasks.length}">
-            <span class="progress-count">${String(visibleTasks.length).padStart(2, "0")}</span>
+          <div class="day-progress" aria-label="${showingHistory ? "Задач в истории" : showingToday ? "Активных" : "Выполненных сегодня"} задач: ${showingHistory ? visibleHistory().length : visibleTasks.length}">
+            <span class="progress-count">${String(showingHistory ? visibleHistory().length : visibleTasks.length).padStart(2, "0")}</span>
           </div>
         </section>
 
@@ -330,7 +390,10 @@ function render(allowDuringAnimation = false): void {
             placeholder="Новая задача" aria-label="Название новой задачи" ${saving ? "disabled" : ""} />
           <kbd>ENTER <span aria-hidden="true">↵</span></kbd>
           <button class="add-button" type="submit" aria-label="Добавить задачу" ${saving ? "disabled" : ""}>＋</button>
-        </form>` : ""}
+        </form>` : showingHistory ? `<div class="history-controls">
+          <label><span class="visually-hidden">Поиск по названию</span><input type="search" data-history-search placeholder="Поиск" value="${escapeHtml(historyQuery)}" /></label>
+          <label><span class="visually-hidden">Фильтр состояния</span><select data-history-filter aria-label="Фильтр истории"><option value="all" ${historyFilter === "all" ? "selected" : ""}>Все</option><option value="active" ${historyFilter === "active" ? "selected" : ""}>Активные</option><option value="completed" ${historyFilter === "completed" ? "selected" : ""}>Выполненные</option><option value="archived" ${historyFilter === "archived" ? "selected" : ""}>Архив</option></select></label>
+        </div>` : ""}
 
         <p class="error-banner" role="alert" ${errorMessage ? "" : "hidden"}>
           <span aria-hidden="true">!</span> ${escapeHtml(errorMessage)}
@@ -339,10 +402,10 @@ function render(allowDuringAnimation = false): void {
         <section class="queue-section" aria-labelledby="queue-title">
           <div class="section-heading">
             <div class="section-title-wrap">
-              <h2 id="queue-title">${showingToday ? "Очередь" : "Сегодня"}</h2>
+              <h2 id="queue-title">${showingHistory ? "Задачи" : showingToday ? "Очередь" : "Сегодня"}</h2>
             </div>
           </div>
-          ${taskList}
+          ${showingHistory ? `<div class="history-list-container">${taskList}</div>` : taskList}
         </section>
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
@@ -369,6 +432,21 @@ async function refreshTasks(): Promise<void> {
   } finally {
     loading = false;
     render();
+  }
+}
+
+async function refreshHistory(): Promise<void> {
+  historyLoading = true;
+  render(true);
+  try {
+    history = await invoke<HistoryItem[]>("list_history");
+    historyLoaded = true;
+    errorMessage = "";
+  } catch (error) {
+    errorMessage = backendMessage(error);
+  } finally {
+    historyLoading = false;
+    render(true);
   }
 }
 
@@ -401,6 +479,33 @@ function bindEvents(): void {
       activeView = nextView;
       window.history.pushState(null, "", `#${activeView}`);
       render(true);
+      if (activeView === "history" && !historyLoaded) void refreshHistory();
+    });
+  });
+
+  const updateHistoryResults = (): void => {
+    const list = root.querySelector<HTMLElement>(".history-list-container");
+    if (list) list.innerHTML = renderHistoryItems();
+    const count = visibleHistory().length;
+    const progressCount = root.querySelector<HTMLElement>(".progress-count");
+    const progress = root.querySelector<HTMLElement>(".day-progress");
+    if (progressCount) progressCount.textContent = String(count).padStart(2, "0");
+    progress?.setAttribute("aria-label", `Задач в истории: ${count}`);
+  };
+  root.querySelector<HTMLInputElement>("[data-history-search]")?.addEventListener("input", (event) => {
+    historyQuery = (event.currentTarget as HTMLInputElement).value;
+    updateHistoryResults();
+  });
+  root.querySelector<HTMLSelectElement>("[data-history-filter]")?.addEventListener("change", (event) => {
+    historyFilter = (event.currentTarget as HTMLSelectElement).value as HistoryFilter;
+    updateHistoryResults();
+  });
+  root.querySelectorAll<HTMLButtonElement>("[data-restore-task]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.dataset.restoreTask;
+      if (!id || saving) return;
+      const restored = await perform(() => invoke("restore_task", { id }));
+      if (restored) await refreshHistory();
     });
   });
 
@@ -598,19 +703,24 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
   if (theme === "system") applyTheme();
 });
 const syncViewFromHash = (): void => {
-  const nextView: View = window.location.hash === "#completed" ? "completed" : "today";
+  const nextView: View = window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : "today";
   if (nextView === activeView) return;
   activeView = nextView;
   render(true);
+  if (activeView === "history" && !historyLoaded) void refreshHistory();
 };
 window.addEventListener("popstate", syncViewFromHash);
 window.addEventListener("hashchange", syncViewFromHash);
 render();
 void refreshTasks();
+if (activeView === "history") void refreshHistory();
 window.setInterval(async () => {
   try {
     const archived = await invoke<number>("archive_expired_tasks");
-    if (archived > 0) await refreshTasks();
+    if (archived > 0) {
+      await refreshTasks();
+      if (activeView === "history") await refreshHistory();
+    }
   } catch (error) {
     errorMessage = backendMessage(error);
     render();

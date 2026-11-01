@@ -1,4 +1,8 @@
-use std::{collections::HashSet, path::Path, time::SystemTime};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    time::SystemTime,
+};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -36,6 +40,23 @@ pub struct Task {
     pub updated_at: i64,
     pub completed_at: Option<i64>,
     pub archived_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskEvent {
+    pub id: String,
+    pub task_id: String,
+    pub kind: String,
+    pub occurred_at: i64,
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryItem {
+    pub task: Task,
+    pub events: Vec<TaskEvent>,
 }
 
 pub struct TaskStore {
@@ -273,6 +294,103 @@ impl TaskStore {
         }
         record_event(&transaction, id, "reopened", now, &serde_json::json!({}))?;
         transaction.commit().map_err(|_| AppError::storage())
+    }
+
+    pub fn restore_task(&self, id: &str) -> Result<(), AppError> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let previous_created_at: Option<i64> = transaction
+            .query_row(
+                "SELECT created_at FROM tasks WHERE id = ?1 AND status = 'archived'",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| AppError::storage())?;
+        let Some(previous_created_at) = previous_created_at else {
+            return if task_exists(&transaction, id)? {
+                Err(AppError::invalid_state())
+            } else {
+                Err(not_found())
+            };
+        };
+
+        let position: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(position) + 1, 0) FROM tasks WHERE status = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| AppError::storage())?;
+        let now = now_millis();
+        transaction.execute(
+            "UPDATE tasks SET status = 'active', position = ?1, created_at = ?2, updated_at = ?2,
+             completed_at = NULL, archived_at = NULL WHERE id = ?3 AND status = 'archived'",
+            params![position, now, id],
+        ).map_err(|_| AppError::storage())?;
+        record_event(
+            &transaction,
+            id,
+            "restored",
+            now,
+            &serde_json::json!({ "previousCreatedAt": previous_created_at, "createdAt": now }),
+        )?;
+        transaction.commit().map_err(|_| AppError::storage())
+    }
+
+    pub fn list_history(&self) -> Result<Vec<HistoryItem>, AppError> {
+        let mut tasks = self.list_tasks()?;
+        tasks.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, task_id, kind, occurred_at, details FROM task_events
+                 ORDER BY task_id, occurred_at ASC, id ASC",
+            )
+            .map_err(|_| AppError::storage())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(|_| AppError::storage())?;
+        let mut events_by_task: HashMap<String, Vec<TaskEvent>> = HashMap::new();
+        for row in rows {
+            let (id, task_id, kind, occurred_at, details) = row.map_err(|_| AppError::storage())?;
+            let details = serde_json::from_str(&details).map_err(|_| AppError::storage())?;
+            events_by_task
+                .entry(task_id.clone())
+                .or_default()
+                .push(TaskEvent {
+                    id,
+                    task_id,
+                    kind,
+                    occurred_at,
+                    details,
+                });
+        }
+        drop(statement);
+
+        tasks
+            .into_iter()
+            .map(|task| {
+                let events = events_by_task.remove(&task.id).unwrap_or_default();
+                Ok(HistoryItem { task, events })
+            })
+            .collect()
     }
 
     pub fn reorder_tasks(&self, ids: &[String]) -> Result<(), AppError> {

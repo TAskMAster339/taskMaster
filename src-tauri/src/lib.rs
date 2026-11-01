@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::Serialize;
-use tasks::{Task, TaskStore};
+use tasks::{HistoryItem, Task, TaskStore};
 use tauri::{Manager, State};
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +107,16 @@ fn archive_expired_tasks(state: State<'_, AppState>) -> Result<usize, AppError> 
     })
 }
 
+#[tauri::command]
+fn list_history(state: State<'_, AppState>) -> Result<Vec<HistoryItem>, AppError> {
+    with_store(&state, TaskStore::list_history)
+}
+
+#[tauri::command]
+fn restore_task(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |store| store.restore_task(&id))
+}
+
 fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
     std::fs::create_dir_all(&path).map_err(|_| AppError::storage())?;
     let store =
@@ -140,7 +150,9 @@ pub fn run() {
             reorder_tasks,
             complete_task,
             reopen_task,
-            archive_expired_tasks
+            archive_expired_tasks,
+            list_history,
+            restore_task
         ])
         .run(tauri::generate_context!())
         .expect("failed to run taskMaster");

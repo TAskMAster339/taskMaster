@@ -252,3 +252,51 @@ fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
     assert_eq!(version, 2);
     assert_eq!(violations, 0);
 }
+
+#[test]
+fn restores_archived_task_to_queue_with_a_new_48_hour_window_and_history_event() {
+    let store = TaskStore::in_memory().unwrap();
+    let old = store.create_task("Старая задача").unwrap();
+    let active = store.create_task("Остаётся в очереди").unwrap();
+    store.set_created_at(&old.id, 1_000).unwrap();
+    store
+        .archive_expired_tasks(1_000 + 48 * 60 * 60 * 1000)
+        .unwrap();
+
+    store.restore_task(&old.id).unwrap();
+
+    let tasks = store.list_tasks().unwrap();
+    let restored = tasks.iter().find(|task| task.id == old.id).unwrap();
+    assert_eq!(restored.status, TaskStatus::Active);
+    assert_eq!(restored.position, 1);
+    assert!(restored.created_at > 1_000 + 48 * 60 * 60 * 1000);
+    assert_eq!(restored.archived_at, None);
+    assert_eq!(tasks[0].id, active.id);
+
+    let history = store.list_history().unwrap();
+    let restored_history = history.iter().find(|item| item.task.id == old.id).unwrap();
+    assert!(
+        restored_history
+            .events
+            .iter()
+            .any(|event| event.kind == "restored")
+    );
+    assert!(
+        restored_history
+            .events
+            .iter()
+            .any(|event| event.kind == "archived")
+    );
+    let restored_event = restored_history
+        .events
+        .iter()
+        .find(|event| event.kind == "restored")
+        .unwrap();
+    assert_eq!(restored_event.details["previousCreatedAt"], 1_000);
+    assert!(
+        restored_history
+            .events
+            .windows(2)
+            .all(|pair| pair[0].occurred_at <= pair[1].occurred_at)
+    );
+}
