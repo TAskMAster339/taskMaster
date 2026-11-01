@@ -299,8 +299,9 @@ function renderCalendar(): string {
     const date = new Date(first.getFullYear(), first.getMonth(), index + 1);
     const value = toLocalDateString(date);
     const disabled = date > todayStart;
+    const isToday = value === toLocalDateString(todayStart);
     const hasTasks = createdTaskDays.has(value);
-    return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""} ${hasTasks ? "has-tasks" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat("ru-RU", { dateStyle: "full" }).format(date)}${hasTasks ? ", есть задачи" : ""}" ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}><span>${date.getDate()}</span></button>`;
+    return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""} ${isToday ? "is-today" : ""} ${hasTasks ? "has-tasks" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat("ru-RU", { dateStyle: "full" }).format(date)}${isToday ? ", сегодня" : ""}${hasTasks ? ", есть задачи" : ""}" ${isToday ? 'aria-current="date"' : ""} ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}><span>${date.getDate()}</span></button>`;
   }).join("")}`;
   const nextMonthDisabled = first.getFullYear() === today.getFullYear() && first.getMonth() >= today.getMonth();
   return `<section class="history-calendar" aria-label="Календарь истории">
