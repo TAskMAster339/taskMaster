@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::Serialize;
-use tasks::{DueReminder, FocusSession, HistoryDay, Task, TaskStore};
+use tasks::{DueReminder, HistoryDay, Task, TaskStore, Timer};
 use tauri::{
     AppHandle, Emitter, Manager, State, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder},
@@ -31,6 +31,14 @@ impl AppError {
         Self {
             code: "invalid_title",
             message: "Введите название длиной от 1 до 300 символов.".into(),
+        }
+    }
+
+    fn invalid_timer() -> Self {
+        Self {
+            code: "invalid_timer",
+            message: "Укажите название и длительность от 1 секунды до 99 часов 59 минут 59 секунд."
+                .into(),
         }
     }
 
@@ -155,34 +163,41 @@ fn clear_task_reminder(id: String, state: State<'_, AppState>) -> Result<(), App
 }
 
 #[tauri::command]
-fn get_focus_session(state: State<'_, AppState>) -> Result<Option<FocusSession>, AppError> {
-    with_store(&state, TaskStore::get_focus)
+fn list_timers(state: State<'_, AppState>) -> Result<Vec<Timer>, AppError> {
+    with_store(&state, TaskStore::list_timers)
 }
-
 #[tauri::command]
-fn start_focus(
-    id: String,
+fn create_timer(
+    name: String,
     duration_seconds: i64,
     state: State<'_, AppState>,
-) -> Result<FocusSession, AppError> {
-    with_store(&state, |store| store.start_focus(&id, duration_seconds))
-}
-
-#[tauri::command]
-fn pause_focus(state: State<'_, AppState>) -> Result<(), AppError> {
-    with_store(&state, |s| s.pause_focus())
-}
-#[tauri::command]
-fn resume_focus(state: State<'_, AppState>) -> Result<(), AppError> {
-    with_store(&state, |s| s.resume_focus())
-}
-#[tauri::command]
-fn finish_focus(state: State<'_, AppState>) -> Result<FocusSession, AppError> {
-    with_store(&state, |s| s.finish_focus())
+) -> Result<Timer, AppError> {
+    with_store(&state, |store| {
+        store.create_timer(
+            &name,
+            duration_seconds,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64,
+        )
+    })
 }
 #[tauri::command]
-fn cancel_focus(state: State<'_, AppState>) -> Result<(), AppError> {
-    with_store(&state, |s| s.cancel_focus())
+fn start_timer(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |store| store.start_timer(&id))
+}
+#[tauri::command]
+fn pause_timer(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |store| store.pause_timer(&id))
+}
+#[tauri::command]
+fn reset_timer(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |store| store.reset_timer(&id))
+}
+#[tauri::command]
+fn delete_timer(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |store| store.delete_timer(&id))
 }
 
 fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
@@ -196,7 +211,6 @@ fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
     store.archive_expired_tasks(now)?;
     store.mark_missed_reminders(now)?;
     store.clear_non_active_reminders(now)?;
-    store.recover_focus_at(now)?;
     Ok(store)
 }
 
@@ -213,19 +227,19 @@ fn notify_reminder(app: &AppHandle, reminder: DueReminder) {
         .ok();
 }
 
-fn notify_focus_finished(app: &AppHandle, session: FocusSession) {
+fn notify_timer_finished(app: &AppHandle, timer: Timer) {
     use tauri_plugin_notification::NotificationExt;
     if app
         .notification()
         .builder()
-        .title("Фокус-таймер завершён")
-        .body(&session.task_title)
+        .title("Таймер завершён")
+        .body(&timer.name)
         .show()
         .is_err()
     {
-        let _ = app.emit("focus-notification-error", ());
+        let _ = app.emit("timer-notification-error", ());
     }
-    let _ = app.emit("focus-session-finished", session);
+    let _ = app.emit("timer-finished", timer);
 }
 
 fn register_notification_actions(app: &AppHandle) {
@@ -277,19 +291,19 @@ fn start_reminder_scheduler(app: AppHandle) {
                     Vec::new()
                 }
             };
-            let finished_focus = match store.finish_expired_focus_at(now) {
-                Ok(session) => session,
+            let finished_timers = match store.take_due_timers() {
+                Ok(timers) => timers,
                 Err(_) => {
-                    let _ = app.emit("focus-runtime-error", ());
-                    None
+                    let _ = app.emit("timer-runtime-error", ());
+                    Vec::new()
                 }
             };
             drop(guard);
             for reminder in reminders {
                 notify_reminder(&app, reminder);
             }
-            if let Some(session) = finished_focus {
-                notify_focus_finished(&app, session);
+            for timer in finished_timers {
+                notify_timer_finished(&app, timer);
             }
         }
     });
@@ -387,12 +401,12 @@ pub fn run() {
             restore_task,
             set_task_reminder,
             clear_task_reminder,
-            get_focus_session,
-            start_focus,
-            pause_focus,
-            resume_focus,
-            finish_focus,
-            cancel_focus
+            list_timers,
+            create_timer,
+            start_timer,
+            pause_timer,
+            reset_timer,
+            delete_timer,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run taskMaster");
