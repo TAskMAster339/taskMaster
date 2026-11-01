@@ -185,6 +185,10 @@ body.is-task-dragging { user-select: none; cursor: grabbing; }
 .history-column-heading h2 { margin: 0; color: var(--text); font: 600 17px/1.2 "Oswald", sans-serif; letter-spacing: .04em; text-transform: uppercase; }
 .history-column-heading span { color: var(--muted); font: 600 15px/1 "Oswald", sans-serif; }
 .history-task-list { min-width: 0; min-height: 0; display: grid; grid-auto-rows: max-content; flex: 1 1 0; align-content: start; margin: 0; padding: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--accent) var(--surface-soft); scrollbar-width: thin; list-style: none; }
+.history-task-list::-webkit-scrollbar, .history-list-container::-webkit-scrollbar { width: 10px; }
+.history-task-list::-webkit-scrollbar-track, .history-list-container::-webkit-scrollbar-track { margin-block: 3px; background: var(--surface-soft); }
+.history-task-list::-webkit-scrollbar-thumb, .history-list-container::-webkit-scrollbar-thumb { border: 2px solid var(--surface-soft); background: var(--obi); }
+.history-task-list::-webkit-scrollbar-button, .history-list-container::-webkit-scrollbar-button { width: 0; height: 0; display: none; }
 .history-task-row { min-width: 0; min-height: 43px; display: flex; align-items: center; gap: 9px; padding: 7px 5px; border-bottom: 1px solid var(--line); }
 .history-task-title { min-width: 0; flex: 1; color: var(--text); font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
 .history-task-row time { flex: 0 0 auto; color: var(--muted); font: 600 12px/1.2 "Oswald", sans-serif; font-variant-numeric: tabular-nums; }
@@ -213,10 +217,6 @@ body.is-task-dragging { user-select: none; cursor: grabbing; }
   .calendar-day, .calendar-empty { min-height: 39px; }
   .history-columns { display: flex; flex-direction: column; gap: 14px; }
   .history-list-container { display: block; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--accent) var(--surface-soft); scrollbar-width: thin; }
-  .history-list-container::-webkit-scrollbar { width: 10px; }
-  .history-list-container::-webkit-scrollbar-track { margin-block: 3px; background: var(--surface-soft); }
-  .history-list-container::-webkit-scrollbar-thumb { border: 2px solid var(--surface-soft); background: var(--obi); }
-  .history-list-container::-webkit-scrollbar-button { display: none; }
   .history-column { min-height: auto; overflow: visible; }
   .history-task-list { min-height: auto; flex: 0 0 auto; overflow: visible; }
 }
