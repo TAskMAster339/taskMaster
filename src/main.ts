@@ -464,16 +464,15 @@ function renderTask(task: Task, index: number, completed = false): string {
 function timerCard(timer: Timer, fullscreen = false): string {
   const progress = timer.durationSeconds > 0 ? timer.remainingSeconds / timer.durationSeconds : 0;
   const circumference = 2 * Math.PI * 86;
-  const ring = `<svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true"><circle class="timer-ring-track" cx="100" cy="100" r="86"/><circle class="timer-ring-progress" cx="100" cy="100" r="86" style="stroke-dasharray:${circumference};stroke-dashoffset:${circumference * (1 - progress)}"/></svg>`;
+  const ring = `<svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true"><circle class="timer-ring-track" cx="100" cy="100" r="86"/><circle class="timer-ring-progress" cx="100" cy="100" r="86" style="stroke-dasharray:${circumference} ${circumference};stroke-dashoffset:${circumference * (1 - progress)}"/></svg>`;
   return `<article class="timer-card ${fullscreen ? "timer-card-focus" : ""}" data-timer-card="${timer.id}" data-timer-status="${timer.status}">
-    <div class="timer-card-heading"><h2>${escapeHtml(timer.name)}</h2>${fullscreen ? '<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="Выйти из полноэкранного режима"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>' : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="Открыть на весь экран">⛶</button>`}</div>
+    <div class="timer-card-heading"><h2>${escapeHtml(timer.name)}</h2><div class="timer-card-actions">${fullscreen ? '<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="Выйти из полноэкранного режима"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>' : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="Открыть на весь экран">⛶</button><button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="Удалить таймер">×</button>`}</div></div>
     <div class="timer-dial">${ring}<strong class="timer-clock" data-timer-clock>${formatTimerTime(timer.remainingSeconds)}</strong></div>
     <div class="timer-footer">
       ${timer.status === "finished" ? '<span class="timer-status" role="status">ЗАВЕРШЁН</span>' : ""}
       <div class="timer-controls">
         ${timer.status === "running" ? `<button type="button" data-timer-action="pause" data-timer-id="${timer.id}" aria-label="Пауза">Ⅱ</button>` : `<button type="button" data-timer-action="start" data-timer-id="${timer.id}" aria-label="${timer.status === "finished" ? "Запустить заново" : "Запустить"}">${timer.status === "finished" ? "↻" : "▶"}</button>`}
         <button type="button" data-timer-action="reset" data-timer-id="${timer.id}" aria-label="Сбросить таймер">↶</button>
-        ${fullscreen ? "" : `<button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="Удалить таймер">×</button>`}
       </div>
     </div>
   </article>`;
