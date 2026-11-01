@@ -37,6 +37,119 @@ let announcement = "";
 let theme: Theme = readTheme();
 type View = "today" | "completed";
 let activeView: View = window.location.hash === "#completed" ? "completed" : "today";
+const enteringTaskIds = new Set<string>();
+
+function waitForMotion(milliseconds: number): Promise<void> {
+  const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : milliseconds;
+  return new Promise((resolve) => window.setTimeout(resolve, duration));
+}
+
+function captureTaskPositions(): Map<string, string> {
+  const positions = new Map<string, string>();
+  root.querySelectorAll<HTMLLIElement>('.task-row[data-reorderable="true"]').forEach((row) => {
+    const id = row.dataset.taskId;
+    const label = row.querySelector<HTMLElement>(".task-position");
+    const oldPosition = label?.classList.contains("is-changing") ? label.querySelector<HTMLElement>(".position-old")?.textContent : "";
+    const position = oldPosition || label?.dataset.position;
+    if (id && position) positions.set(id, position);
+  });
+  return positions;
+}
+
+function animatePositionChanges(previous: Map<string, string>): void {
+  root.querySelectorAll<HTMLLIElement>('.task-row[data-reorderable="true"]').forEach((row) => {
+    const oldPosition = previous.get(row.dataset.taskId ?? "");
+    const position = row.querySelector<HTMLElement>(".task-position");
+    if (!oldPosition || !position || oldPosition === position.dataset.position) return;
+    const oldValue = position.querySelector<HTMLElement>(".position-old");
+    if (!oldValue) return;
+    oldValue.textContent = oldPosition;
+    position.classList.add("is-changing");
+    requestAnimationFrame(() => position.classList.add("is-changed"));
+    const finish = (): void => {
+      position.classList.remove("is-changing", "is-changed");
+      oldValue.textContent = "";
+      oldValue.removeEventListener("transitionend", finish);
+    };
+    oldValue.addEventListener("transitionend", finish, { once: true });
+    window.setTimeout(finish, 320);
+  });
+}
+
+function animateEnteringTasks(): void {
+  enteringTaskIds.forEach((id) => {
+    const row = root.querySelector<HTMLLIElement>(`.task-row[data-task-id="${CSS.escape(id)}"]`);
+    if (!row) return;
+    row.classList.add("is-entering");
+    const finish = (): void => {
+      row.classList.remove("is-entering");
+      enteringTaskIds.delete(id);
+    };
+    row.querySelector<HTMLElement>(".task-title")?.addEventListener("animationend", finish, { once: true });
+    window.setTimeout(finish, 900);
+  });
+}
+
+async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button: HTMLButtonElement): Promise<void> {
+  if (saving) return;
+  saving = true;
+  errorMessage = "";
+  button.disabled = true;
+  button.classList.add("checked", "is-checking");
+  button.setAttribute("aria-pressed", "true");
+  button.setAttribute("aria-label", `Выполнена — ${task.title}`);
+  const mark = button.querySelector<HTMLElement>("span");
+  if (mark) mark.textContent = "✓";
+  row.classList.add("is-completing");
+
+  await waitForMotion(150);
+  row.classList.add("is-striking");
+  await waitForMotion(230);
+  const height = row.getBoundingClientRect().height;
+  row.style.height = `${height}px`;
+  row.style.overflow = "hidden";
+  requestAnimationFrame(() => {
+    row.classList.add("is-collapsing");
+    row.style.height = "0px";
+    row.style.paddingBlock = "0px";
+    row.style.borderBottomWidth = "0px";
+  });
+  await waitForMotion(300);
+
+  try {
+    await invoke("complete_task", { id: task.id });
+    saving = false;
+    await refreshTasks();
+  } catch (error) {
+    saving = false;
+    errorMessage = backendMessage(error);
+    await refreshTasks();
+    errorMessage = backendMessage(error);
+    render();
+  }
+}
+
+async function createTask(title: string): Promise<void> {
+  if (saving) return;
+  saving = true;
+  errorMessage = "";
+  render();
+  try {
+    const created = await invoke<Task>("create_task", { title });
+    enteringTaskIds.add(created.id);
+    saving = false;
+    await refreshTasks();
+    if (activeView === "today" && !loadFailed) {
+      root.querySelector<HTMLElement>(".task-list")?.scrollTo({ top: Number.MAX_SAFE_INTEGER, behavior: "smooth" });
+    } else {
+      enteringTaskIds.delete(created.id);
+    }
+  } catch (error) {
+    saving = false;
+    errorMessage = backendMessage(error);
+    render();
+  }
+}
 
 function readTheme(): Theme {
   try {
@@ -110,6 +223,7 @@ function completedTodayTasks(): Task[] {
 
 function renderTask(task: Task, index: number, completed = false): string {
   const isEditing = editingTaskId === task.id;
+  const position = String(index + 1).padStart(2, "0");
   const title = isEditing
     ? `<form class="rename-form" data-rename-form="${task.id}">
         <input class="rename-input" name="title" aria-label="Новое название задачи" value="${escapeHtml(task.title)}" required />
@@ -118,7 +232,7 @@ function renderTask(task: Task, index: number, completed = false): string {
 
   return `
     <li class="task-row ${completed ? "is-completed" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
-      ${completed ? "" : `<span class="task-position" aria-label="Задача ${index + 1}">${String(index + 1).padStart(2, "0")}</span>`}
+      ${completed ? "" : `<span class="task-position" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>`}
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
         aria-pressed="${completed}" ${saving ? "disabled" : ""}>
@@ -129,6 +243,7 @@ function renderTask(task: Task, index: number, completed = false): string {
 }
 
 function render(): void {
+  const previousPositions = captureTaskPositions();
   const active = activeTasks();
   const completedToday = completedTodayTasks();
   const showingToday = activeView === "today";
@@ -140,7 +255,7 @@ function render(): void {
       : loadFailed
         ? `<div class="empty-state load-error-state">
              <span class="empty-mark" aria-hidden="true">!</span>
-             <strong>Очередь недоступна</strong>
+             <strong>${showingToday ? "Очередь недоступна" : "Список недоступен"}</strong>
              <span>Попробуйте загрузить задачи ещё раз.</span>
              <button class="retry-button" type="button" data-retry-load>Повторить</button>
            </div>`
@@ -196,6 +311,8 @@ function render(): void {
     </div>`;
 
   bindEvents();
+  animatePositionChanges(previousPositions);
+  animateEnteringTasks();
   if (editingTaskId) {
     const input = root.querySelector<HTMLInputElement>(".rename-input");
     input?.focus();
@@ -273,15 +390,20 @@ function bindEvents(): void {
       root.querySelector<HTMLInputElement>("#new-task-title")?.focus();
       return;
     }
-    void perform(() => invoke("create_task", { title }));
+    void createTask(title);
   });
 
   root.querySelectorAll<HTMLButtonElement>("[data-toggle-task]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (saving) return;
       const task = tasks.find((item) => item.id === button.dataset.toggleTask);
       if (!task) return;
-      const command = task.status === "active" ? "complete_task" : "reopen_task";
-      void perform(() => invoke(command, { id: task.id }));
+      if (task.status === "active") {
+        const row = button.closest<HTMLLIElement>(".task-row");
+        if (row) void completeTaskWithAnimation(task, row, button);
+      } else {
+        void perform(() => invoke("reopen_task", { id: task.id }));
+      }
     });
   });
 
@@ -431,11 +553,13 @@ applyTheme();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (theme === "system") applyTheme();
 });
-window.addEventListener("popstate", () => {
+const syncViewFromHash = (): void => {
   const nextView: View = window.location.hash === "#completed" ? "completed" : "today";
   if (nextView === activeView) return;
   activeView = nextView;
   render();
-});
+};
+window.addEventListener("popstate", syncViewFromHash);
+window.addEventListener("hashchange", syncViewFromHash);
 render();
 void refreshTasks();
