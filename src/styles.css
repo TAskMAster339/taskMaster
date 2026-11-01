@@ -42,7 +42,6 @@ button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visibl
 .sidebar { width: 218px; flex: 0 0 218px; display: flex; flex-direction: column; padding: 31px 18px 22px; background: var(--sidebar); }
 .brand { display: inline-flex; align-items: center; width: 174px; height: 36px; margin: 0 0 51px 6px; overflow: hidden; text-decoration: none; }
 .brand-logo { width: 174px; height: 36px; flex: 0 0 174px; }
-.brand-logo--dark { display: none; }
 .navigation { display: grid; gap: 5px; }
 .theme-switch { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; margin-top: auto; padding: 0 11px; border: 1px solid transparent; border-radius: 3px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
 .theme-switch:hover { border-color: var(--line); color: var(--ink); background: var(--surface-soft); }
@@ -191,8 +190,6 @@ body.is-task-dragging { user-select: none; cursor: grabbing; }
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 :root[data-theme="dark"] { color: #e9eae3; background: #171a17; --page: #171a17; --sidebar: #111411; --surface: #20241f; --surface-soft: #292e28; --ink: #e9eae3; --muted: #a5a89d; --quiet: #898d82; --line: #393d35; --line-strong: #505449; --accent: #c5ef5b; --accent-ink: #20251a; --accent-strong: #c5ef5b; --brand-accent: #bfdf83; --heading-accent: #c5ef5b; --nav-current-bg: #292e28; --nav-current-ink: #e9eae3; --nav-count: #d9f4a1; --completed-ink: #c0c4b9; --checkbox-border: #969b8e; --danger: #e3a095; --danger-soft: #392a27; }
-:root[data-theme="dark"] .brand-logo--dark { display: block; }
-:root[data-theme="dark"] .brand-logo--light { display: none; }
 :root[data-theme="dark"] .task-row:hover { background: rgb(255 255 255 / 4%); }
 :root[data-theme="dark"] .task-check:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 :root[data-theme="dark"] .empty-state { border-color: #505449; background: rgb(255 255 255 / 3%); }

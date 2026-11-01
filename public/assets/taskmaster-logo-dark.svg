@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="174" height="36" viewBox="0 0 174 36" role="img" aria-label="taskMaster">
   <circle cx="18" cy="18" r="14.5" fill="#292e28"/>
   <path d="m11 18.5 4.5 4.2 9-10.2" fill="none" stroke="#c5ef5b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="42" y="25" fill="#e9eae3" font-family="Segoe UI,Arial,sans-serif" font-size="21" font-weight="750" letter-spacing="-1.1">task</text>
-  <text x="81" y="25" fill="#c5ef5b" font-family="Segoe UI,Arial,sans-serif" font-size="21" font-weight="750" letter-spacing="-1.1">Master</text>
+  <text x="42" y="25" font-family="Segoe UI,Arial,sans-serif" font-size="21" font-weight="750" letter-spacing="-1.1" fill="#e9eae3">task<tspan fill="#c5ef5b" dx="-1.5">Master</tspan></text>
 </svg>

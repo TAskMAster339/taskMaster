@@ -201,6 +201,12 @@ function applyTheme(): void {
   const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
   document.documentElement.dataset.themeMode = theme;
+  root.querySelector<HTMLImageElement>(".brand-logo")?.setAttribute("src", logoSource());
+}
+
+function logoSource(): string {
+  const mode = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  return `/assets/taskmaster-logo-${mode}.svg?v=2`;
 }
 
 function updateThemeButton(): void {
@@ -268,7 +274,7 @@ function renderTask(task: Task, index: number, completed = false): string {
     : `<span class="task-title">${escapeHtml(task.title)}</span>`;
 
   return `
-    <li class="task-row ${completed ? "is-completed" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
+    <li class="task-row ${completed ? "is-completed" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
       <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
@@ -279,8 +285,8 @@ function renderTask(task: Task, index: number, completed = false): string {
     </li>`;
 }
 
-function render(): void {
-  if (taskAnimationLocks.size > 0) return;
+function render(allowDuringAnimation = false): void {
+  if (taskAnimationLocks.size > 0 && !allowDuringAnimation) return;
   const previousPositions = captureTaskPositions();
   const active = activeTasks();
   const completedToday = completedTodayTasks();
@@ -304,7 +310,7 @@ function render(): void {
   root.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar" aria-label="taskMaster">
-        <a class="brand" href="#today" aria-label="taskMaster — Сегодня"><img class="brand-logo brand-logo--dark" src="/assets/taskmaster-logo-dark.svg" alt="" /><img class="brand-logo brand-logo--light" src="/assets/taskmaster-logo-light.svg" alt="" /></a>
+        <a class="brand" href="#today" aria-label="taskMaster — Сегодня"><img class="brand-logo" src="${logoSource()}" alt="" /></a>
         <nav class="navigation" aria-label="Разделы">
           <a class="nav-item ${showingToday ? "is-current" : ""}" href="#today" data-view="today" ${showingToday ? 'aria-current="page"' : ""}><span class="nav-index">01</span>Сегодня<span class="nav-count">${active.length}</span></a>
           <a class="nav-item ${showingToday ? "" : "is-current"}" href="#completed" data-view="completed" ${showingToday ? "" : 'aria-current="page"'}><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedToday.length}</span></a>
@@ -400,7 +406,7 @@ function bindEvents(): void {
       if (!nextView || nextView === activeView) return;
       activeView = nextView;
       window.history.pushState(null, "", `#${activeView}`);
-      render();
+      render(true);
     });
   });
 
@@ -598,7 +604,7 @@ const syncViewFromHash = (): void => {
   const nextView: View = window.location.hash === "#completed" ? "completed" : "today";
   if (nextView === activeView) return;
   activeView = nextView;
-  render();
+  render(true);
 };
 window.addEventListener("popstate", syncViewFromHash);
 window.addEventListener("hashchange", syncViewFromHash);
