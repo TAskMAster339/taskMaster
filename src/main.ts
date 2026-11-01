@@ -1023,21 +1023,56 @@ async function renderOverlay(): Promise<void> {
   const overlayRoot = root;
   let overlayError = "";
   let lastRenderKey = "";
+  let previousRunningIds = new Set<string>();
+  let lastTimerCount = -1;
+  const enteringTimerIds = new Set<string>();
+  const endingTimers = new Map<string, Timer>();
   const load = async (): Promise<void> => {
     try {
       const active = (await invoke<Task[]>("list_tasks")).filter((task) => task.status === "active").sort((a, b) => a.position - b.position);
+      const allTimers = await invoke<Timer[]>("list_timers");
+      const runningTimers = allTimers.filter((timer) => timer.status === "running");
+      const runningIds = new Set(runningTimers.map((timer) => timer.id));
+      for (const timer of runningTimers) {
+        if (!previousRunningIds.has(timer.id)) {
+          enteringTimerIds.add(timer.id);
+          window.setTimeout(() => { enteringTimerIds.delete(timer.id); void load(); }, 520);
+        }
+      }
+      for (const id of previousRunningIds) {
+        if (!runningIds.has(id)) {
+          const finished = allTimers.find((timer) => timer.id === id && timer.status === "finished");
+          if (finished) {
+            endingTimers.set(id, finished);
+            window.setTimeout(() => { endingTimers.delete(id); void load(); }, 900);
+          }
+        }
+      }
+      previousRunningIds = runningIds;
+      const displayTimers = [...runningTimers, ...endingTimers.values()];
+      if (displayTimers.length !== lastTimerCount) {
+        lastTimerCount = displayTimers.length;
+        void invoke("resize_overlay_for_timers", { timerCount: displayTimers.length });
+      }
       const pinned = await invoke<boolean>("get_overlay_pinned");
       const task = active[0];
-      const renderKey = JSON.stringify([task?.id, task?.title, task?.position, pinned, overlayError]);
+      const renderKey = JSON.stringify([task?.id, task?.title, task?.position, pinned, overlayError, displayTimers.map((timer) => [timer.id, timer.remainingSeconds, timer.status, endingTimers.has(timer.id)])]);
       if (renderKey === lastRenderKey) return;
       lastRenderKey = renderKey;
       overlayRoot.innerHTML = `<section class="overlay-card" aria-label="Следующая задача">
-        <header class="overlay-header" data-tauri-drag-region><span>СЛЕДУЮЩАЯ ЗАДАЧА</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? "Открепить окно" : "Закрепить поверх окон"}" title="${pinned ? "Открепить" : "Закрепить поверх окон"}">${pinned ? "◆" : "◇"}</button></header>
+        <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>СЛЕДУЮЩАЯ ЗАДАЧА</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? "Снять закрепление и разрешить перемещение" : "Закрепить положение поверх окон"}" title="${pinned ? "Открепить" : "Закрепить положение и поверх окон"}">${pinned ? "◆" : "◇"}</button></header>
         ${task ? `<div class="overlay-task"><span class="overlay-number">${String(task.position + 1).padStart(2, "0")}</span><strong>${escapeHtml(task.title)}</strong></div>
           <footer class="overlay-actions"><button type="button" data-overlay-complete="${task.id}">Выполнено</button><button type="button" data-overlay-open>Открыть список</button></footer>`
           : `<div class="overlay-empty"><strong>На сегодня всё</strong><button type="button" data-overlay-open>Добавить задачу</button></div>`}
         ${overlayError ? `<p class="overlay-error" role="alert">${escapeHtml(overlayError)} <button type="button" data-overlay-retry>Повторить</button></p>` : ""}
       </section>`;
+      if (displayTimers.length) {
+        overlayRoot.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="Запущенные таймеры"><div class="overlay-timer-grid">${displayTimers.map((timer) => `<article class="overlay-timer ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""}" aria-label="${escapeHtml(timer.name)}, ${timer.status === "finished" ? "завершён" : formatTimerTime(timer.remainingSeconds)}"><strong>${escapeHtml(timer.name)}</strong><time>${formatTimerTime(timer.remainingSeconds)}</time></article>`).join("")}</div></section>`);
+      }
+      overlayRoot.querySelector<HTMLElement>(".overlay-header")?.addEventListener("pointerdown", (event) => {
+        if (pinned || (event.target as HTMLElement).closest("button")) return;
+        void getCurrentWindow().startDragging().catch((error: unknown) => { overlayError = backendMessage(error); });
+      });
       overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-pin]")?.addEventListener("click", async () => {
         try { await invoke("set_overlay_pinned", { pinned: !pinned }); overlayError = ""; await load(); }
         catch (error) { overlayError = backendMessage(error); await load(); }
@@ -1059,7 +1094,7 @@ async function renderOverlay(): Promise<void> {
   await load();
   void listen("tasks-changed", () => { void load(); });
   void listen("overlay-settings-error", () => { overlayError = "Не удалось сохранить положение оверлея."; void load(); });
-  window.setInterval(() => { void load(); }, 2_000);
+  window.setInterval(() => { void load(); }, 500);
 }
 
 if (getCurrentWindow().label === "overlay") {

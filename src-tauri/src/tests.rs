@@ -1,5 +1,5 @@
 use super::{
-    clamp_to_monitor,
+    clamp_to_monitor, overlay_timer_window_size,
     tasks::{TaskStatus, TaskStore},
 };
 use rusqlite::Connection;
@@ -16,6 +16,14 @@ fn overlay_position_is_clamped_inside_the_monitor_work_area() {
         clamp_to_monitor(-500, -200, 100, 50, 800, 600, 360, 154),
         (100, 50)
     );
+}
+
+#[test]
+fn overlay_timer_columns_expand_right_without_growing_beyond_three_rows() {
+    assert_eq!(overlay_timer_window_size(0, 1920.0), (360.0, 154.0));
+    assert_eq!(overlay_timer_window_size(1, 1920.0), (360.0, 262.0));
+    assert_eq!(overlay_timer_window_size(4, 1920.0), (360.0, 454.0));
+    assert_eq!(overlay_timer_window_size(20, 500.0), (500.0, 454.0));
 }
 
 struct TemporaryDatabase(PathBuf);

@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tasks::{DueReminder, HistoryDay, Task, TaskStore, Timer};
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -442,6 +442,18 @@ fn clamp_to_monitor(
     )
 }
 
+fn overlay_timer_window_size(timer_count: usize, max_width: f64) -> (f64, f64) {
+    if timer_count == 0 {
+        return (360.0, 154.0);
+    }
+    let rows = timer_count.min(3);
+    let columns = timer_count.div_ceil(3);
+    let natural_width = 32.0 + columns as f64 * 88.0 + columns.saturating_sub(1) as f64 * 8.0;
+    let width = natural_width.max(360.0).min(max_width.max(360.0));
+    let height = 154.0 + 20.0 + rows as f64 * 88.0 + rows.saturating_sub(1) as f64 * 8.0;
+    (width, height)
+}
+
 fn ensure_overlay_window(app: &AppHandle) -> Result<WebviewWindow, AppError> {
     if let Some(window) = app.get_webview_window("overlay") {
         return Ok(window);
@@ -493,13 +505,20 @@ fn set_overlay_pinned(
     app: AppHandle,
     state: State<'_, OverlayState>,
 ) -> Result<(), AppError> {
-    if let Some(window) = app.get_webview_window("overlay") {
-        window
-            .set_always_on_top(pinned)
-            .map_err(|_| AppError::storage())?;
-    }
+    let previous = state.settings.lock().map_err(|_| AppError::lock())?.pinned;
     state.settings.lock().map_err(|_| AppError::lock())?.pinned = pinned;
-    save_overlay_settings(&state)
+    if save_overlay_settings(&state).is_err() {
+        state.settings.lock().map_err(|_| AppError::lock())?.pinned = previous;
+        return Err(AppError::storage());
+    }
+    if let Some(window) = app.get_webview_window("overlay") {
+        if window.set_always_on_top(pinned).is_err() {
+            state.settings.lock().map_err(|_| AppError::lock())?.pinned = previous;
+            let _ = save_overlay_settings(&state);
+            return Err(AppError::storage());
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -599,6 +618,31 @@ fn open_task_list(app: AppHandle) {
     let _ = app.emit("overlay-open-today", ());
 }
 
+#[tauri::command]
+fn resize_overlay_for_timers(timer_count: usize, app: AppHandle) -> Result<(), AppError> {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    let max_width = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .and_then(|monitor| {
+            let position = window.outer_position().ok()?;
+            let origin = monitor.position();
+            let right = origin.x.saturating_add(monitor.size().width as i32);
+            Some(
+                (right.saturating_sub(position.x).max(360) as f64 / monitor.scale_factor())
+                    .max(360.0),
+            )
+        })
+        .unwrap_or(960.0);
+    let (width, height) = overlay_timer_window_size(timer_count, max_width);
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|_| AppError::storage())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -660,8 +704,7 @@ pub fn run() {
             register_notification_actions(app.handle());
 
             let show = MenuItemBuilder::with_id("show", "Показать").build(app)?;
-            let overlay =
-                MenuItemBuilder::with_id("overlay", "Показать/скрыть оверлей").build(app)?;
+            let overlay = MenuItemBuilder::with_id("overlay", "Оверлей").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Выход").build(app)?;
             let menu = MenuBuilder::new(app)
                 .items(&[&show, &overlay, &quit])
@@ -751,6 +794,7 @@ pub fn run() {
             set_overlay_shortcut,
             complete_overlay_task,
             open_task_list,
+            resize_overlay_for_timers,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run taskMaster");
