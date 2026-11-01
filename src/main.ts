@@ -289,14 +289,17 @@ function renderCalendar(): string {
   const first = monthStart(calendarMonth);
   const dayOffset = (first.getDay() + 6) % 7;
   const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-  const cells = `${"<span class=\"calendar-empty\" aria-hidden=\"true\"></span>".repeat(dayOffset)}${Array.from({ length: days }, (_, index) => {
+  const leadingCells = "<span class=\"calendar-empty\" aria-hidden=\"true\"></span>".repeat(dayOffset);
+  const dayCells = Array.from({ length: days }, (_, index) => {
     const date = new Date(first.getFullYear(), first.getMonth(), index + 1);
     const value = toLocalDateString(date);
     const disabled = date > todayStart;
     const isToday = value === toLocalDateString(todayStart);
     const hasTasks = createdTaskDays.has(value);
     return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""} ${hasTasks ? "has-tasks" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat("ru-RU", { dateStyle: "full" }).format(date)}${isToday ? ", сегодня" : ""}${hasTasks ? ", есть задачи" : ""}" ${isToday ? 'aria-current="date"' : ""} ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}><span>${date.getDate()}</span></button>`;
-  }).join("")}`;
+  }).join("");
+  const trailingCells = "<span class=\"calendar-empty\" aria-hidden=\"true\"></span>".repeat(42 - dayOffset - days);
+  const cells = `${leadingCells}${dayCells}${trailingCells}`;
   const nextMonthDisabled = first.getFullYear() === today.getFullYear() && first.getMonth() >= today.getMonth();
   return `<section class="history-calendar" aria-label="Календарь истории">
     <div class="calendar-heading"><button type="button" data-calendar-shift="-1" aria-label="Предыдущий месяц">←</button><h2>${new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(first)}</h2><button type="button" data-calendar-shift="1" aria-label="Следующий месяц" ${nextMonthDisabled ? "disabled" : ""}>→</button></div>
