@@ -52,6 +52,7 @@ let theme: Theme = readTheme();
 type View = "today" | "completed" | "history";
 let activeView: View = window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : "today";
 let historyDay: HistoryDay = { completed: [], archived: [] };
+let createdTaskDays = new Set<string>();
 let historyLoading = false;
 let historyQuery = "";
 const yesterday = new Date();
@@ -297,8 +298,9 @@ function renderCalendar(): string {
   const cells = `${"<span class=\"calendar-empty\" aria-hidden=\"true\"></span>".repeat(dayOffset)}${Array.from({ length: days }, (_, index) => {
     const date = new Date(first.getFullYear(), first.getMonth(), index + 1);
     const value = toLocalDateString(date);
-    const disabled = date >= todayStart;
-    return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat("ru-RU", { dateStyle: "full" }).format(date)}" ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}>${date.getDate()}</button>`;
+    const disabled = date > todayStart;
+    const hasTasks = createdTaskDays.has(value);
+    return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""} ${hasTasks ? "has-tasks" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat("ru-RU", { dateStyle: "full" }).format(date)}${hasTasks ? ", есть задачи" : ""}" ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}><span>${date.getDate()}</span></button>`;
   }).join("")}`;
   const nextMonthDisabled = first.getFullYear() === today.getFullYear() && first.getMonth() >= today.getMonth();
   return `<section class="history-calendar" aria-label="Календарь истории">
@@ -461,13 +463,21 @@ async function refreshTasks(): Promise<void> {
 async function refreshHistory(): Promise<void> {
   historyLoading = true;
   historyDay = { completed: [], archived: [] };
+  createdTaskDays = new Set();
   errorMessage = "";
   render(true);
   try {
     const selected = parseLocalDate(selectedHistoryDate);
     const start = selected.getTime();
     const end = new Date(selected.getFullYear(), selected.getMonth(), selected.getDate() + 1).getTime();
-    historyDay = await invoke<HistoryDay>("list_history_for_range", { start, end });
+    const month = monthStart(calendarMonth);
+    const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 1).getTime();
+    const [day, creationTimes] = await Promise.all([
+      invoke<HistoryDay>("list_history_for_range", { start, end }),
+      invoke<number[]>("list_task_creation_times", { start: month.getTime(), end: monthEnd }),
+    ]);
+    historyDay = day;
+    createdTaskDays = new Set(creationTimes.map((timestamp) => toLocalDateString(new Date(timestamp))));
     errorMessage = "";
   } catch (error) {
     errorMessage = backendMessage(error);
@@ -541,7 +551,7 @@ function bindEvents(): void {
       if (shift > 0 && (target.getFullYear() > today.getFullYear()
         || (target.getFullYear() === today.getFullYear() && target.getMonth() > today.getMonth()))) return;
       calendarMonth = target;
-      render(true);
+      void refreshHistory();
     });
   });
   root.querySelectorAll<HTMLButtonElement>("[data-restore-task]").forEach((button) => {

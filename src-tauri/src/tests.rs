@@ -317,3 +317,19 @@ fn history_day_groups_completed_and_archived_tasks_by_event_time() {
             .any(|item| item.task.id == active.id)
     );
 }
+
+#[test]
+fn lists_creation_times_in_a_half_open_calendar_range() {
+    let store = TaskStore::in_memory().unwrap();
+    let created = store.create_task("Задача с отметкой в календаре").unwrap();
+    let start = created.created_at;
+    let end = start + 1;
+
+    assert_eq!(store.list_task_creation_times(start, end).unwrap(), [start]);
+    assert!(
+        store
+            .list_task_creation_times(end, end + 1)
+            .unwrap()
+            .is_empty()
+    );
+}

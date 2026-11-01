@@ -344,6 +344,25 @@ impl TaskStore {
         })
     }
 
+    pub fn list_task_creation_times(&self, start: i64, end: i64) -> Result<Vec<i64>, AppError> {
+        if start >= end {
+            return Err(AppError::invalid_state());
+        }
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT occurred_at FROM task_events
+                 WHERE kind = 'created' AND occurred_at >= ?1 AND occurred_at < ?2
+                 ORDER BY occurred_at ASC",
+            )
+            .map_err(|_| AppError::storage())?;
+        let rows = statement
+            .query_map(rusqlite::params![start, end], |row| row.get(0))
+            .map_err(|_| AppError::storage())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| AppError::storage())
+    }
+
     fn list_history_kind(
         &self,
         kind: &str,

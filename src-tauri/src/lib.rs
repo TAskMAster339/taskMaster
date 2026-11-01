@@ -117,6 +117,15 @@ fn list_history_for_range(
 }
 
 #[tauri::command]
+fn list_task_creation_times(
+    start: i64,
+    end: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<i64>, AppError> {
+    with_store(&state, |store| store.list_task_creation_times(start, end))
+}
+
+#[tauri::command]
 fn restore_task(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
     with_store(&state, |store| store.restore_task(&id))
 }
@@ -156,6 +165,7 @@ pub fn run() {
             reopen_task,
             archive_expired_tasks,
             list_history_for_range,
+            list_task_creation_times,
             restore_task
         ])
         .run(tauri::generate_context!())
