@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 
 type TaskStatus = "active" | "completed";
+type Theme = "system" | "dark" | "light";
+
+const themeStorageKey = "taskmaster.theme";
+const completedHeightStorageKey = "taskmaster.completed-height";
+const themeOrder: Theme[] = ["system", "dark", "light"];
+const themeLabels: Record<Theme, string> = { system: "Система", dark: "Тёмная", light: "Светлая" };
 
 interface Task {
   id: string;
@@ -29,6 +35,50 @@ let loadFailed = false;
 let editingTaskId: string | null = null;
 let mouseDragActive = false;
 let announcement = "";
+let theme: Theme = readTheme();
+let completedOpen = false;
+let completedPanelHeight = readCompletedPanelHeight();
+
+function readTheme(): Theme {
+  try {
+    const value = localStorage.getItem(themeStorageKey);
+    return themeOrder.includes(value as Theme) ? value as Theme : "system";
+  } catch {
+    return "system";
+  }
+}
+
+function readCompletedPanelHeight(): number | null {
+  try {
+    const value = Number(localStorage.getItem(completedHeightStorageKey));
+    return Number.isFinite(value) && value >= 60 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyTheme(): void {
+  const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+  document.documentElement.dataset.themeMode = theme;
+}
+
+function setCompletedHeight(height: number | null): void {
+  const main = root.querySelector<HTMLElement>(".main-content");
+  if (!main) return;
+  const resizer = root.querySelector<HTMLElement>("[data-section-resizer]");
+  if (height === null) main.style.removeProperty("--completed-height");
+  else main.style.setProperty("--completed-height", `${height}px`);
+  resizer?.setAttribute("aria-valuemax", String(Math.max(60, main.clientHeight - 260)));
+  resizer?.setAttribute("aria-valuenow", String(height ?? completedPanelHeight ?? 112));
+}
+
+function updateThemeButton(): void {
+  const button = root.querySelector<HTMLButtonElement>("[data-theme-switch]");
+  if (!button) return;
+  button.setAttribute("aria-label", `Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить`);
+  button.querySelector(".theme-label")!.textContent = themeLabels[theme];
+}
 
 const dateLabel = new Intl.DateTimeFormat("ru-RU", {
   weekday: "long",
@@ -82,13 +132,13 @@ function renderTask(task: Task, index: number, completed = false): string {
         <span aria-hidden="true">${completed ? "✓" : ""}</span>
       </button>
       <div class="task-content">${title}</div>
-      ${completed ? `<span class="completed-label">Готово</span>` : ""}
     </li>`;
 }
 
 function render(): void {
   const active = activeTasks();
   const completed = completedTasks();
+  completedOpen = root.querySelector<HTMLDetailsElement>(".completed-section")?.open ?? completedOpen;
   const taskList = loading
     ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем очередь…</span></div>`
     : active.length
@@ -111,6 +161,9 @@ function render(): void {
         <nav class="navigation" aria-label="Разделы">
           <a class="nav-item is-current" href="#today" aria-current="page"><span class="nav-index">01</span>Сегодня<span class="nav-count">${activeTasks().length}</span></a>
         </nav>
+        <button class="theme-switch" type="button" data-theme-switch aria-label="Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить">
+          <span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy">Тема <span class="theme-label">${themeLabels[theme]}</span></span>
+        </button>
       </aside>
 
       <main class="main-content" id="today">
@@ -144,7 +197,8 @@ function render(): void {
           ${taskList}
         </section>
 
-        <details class="completed-section ${completed.length ? "" : "is-empty"}" ${completed.length ? "" : "aria-disabled=\"true\""}>
+        <div class="section-resizer" data-section-resizer ${completed.length ? "" : "hidden"} role="separator" aria-orientation="horizontal" aria-label="Изменить высоту выполненных задач" aria-valuemin="60" aria-valuemax="480" aria-valuenow="${completedPanelHeight ?? 112}" tabindex="0"></div>
+        <details class="completed-section ${completed.length ? "" : "is-empty"}" ${completed.length ? "" : "aria-disabled=\"true\""} ${completedOpen && completed.length ? "open" : ""}>
           <summary>
             <span class="summary-left"><span class="summary-chevron" aria-hidden="true">›</span><span>Выполнено</span><span class="section-count">${completed.length}</span></span>
           </summary>
@@ -155,6 +209,7 @@ function render(): void {
     </div>`;
 
   bindEvents();
+  setCompletedHeight(completedOpen ? completedPanelHeight : null);
   if (editingTaskId) {
     const input = root.querySelector<HTMLInputElement>(".rename-input");
     input?.focus();
@@ -197,6 +252,62 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  root.querySelector<HTMLButtonElement>("[data-theme-switch]")?.addEventListener("click", () => {
+    theme = themeOrder[(themeOrder.indexOf(theme) + 1) % themeOrder.length]!;
+    try { localStorage.setItem(themeStorageKey, theme); } catch { /* Theme remains active for this session. */ }
+    applyTheme();
+    updateThemeButton();
+  });
+
+  root.querySelector<HTMLDetailsElement>(".completed-section")?.addEventListener("toggle", (event) => {
+    const details = event.currentTarget as HTMLDetailsElement;
+    completedOpen = details.open;
+    if (completedOpen && completedPanelHeight === null) {
+      const main = root.querySelector<HTMLElement>(".main-content");
+      if (main) completedPanelHeight = Math.min(112, Math.round(main.clientHeight * 0.18));
+    }
+    setCompletedHeight(completedOpen ? completedPanelHeight : null);
+  });
+
+  const resizer = root.querySelector<HTMLElement>("[data-section-resizer]");
+  const main = root.querySelector<HTMLElement>(".main-content");
+  const resizeCompleted = (clientY: number): void => {
+    if (!main) return;
+    const paddingBottom = Number.parseFloat(getComputedStyle(main).paddingBottom) || 0;
+    const available = main.getBoundingClientRect().bottom - paddingBottom - clientY;
+    const max = Math.max(60, main.clientHeight - 260);
+    completedPanelHeight = Math.round(Math.min(max, Math.max(60, available)));
+    setCompletedHeight(completedPanelHeight);
+    try { localStorage.setItem(completedHeightStorageKey, String(completedPanelHeight)); } catch { /* Keep the current size for this session. */ }
+    resizer?.setAttribute("aria-valuenow", String(completedPanelHeight));
+  };
+  resizer?.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    if (!completedOpen) {
+      const details = root.querySelector<HTMLDetailsElement>(".completed-section");
+      if (details) details.open = true;
+    }
+    document.body.classList.add("is-resizing-sections");
+    const move = (moveEvent: MouseEvent): void => resizeCompleted(moveEvent.clientY);
+    const stop = (): void => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", stop);
+      document.body.classList.remove("is-resizing-sections");
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop);
+  });
+  resizer?.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const current = completedPanelHeight ?? Math.min(112, Math.round((main?.clientHeight ?? 720) * 0.18));
+    if (!main) return;
+    const paddingBottom = Number.parseFloat(getComputedStyle(main).paddingBottom) || 0;
+    const desired = current + (event.key === "ArrowUp" ? 20 : -20);
+    resizeCompleted(main.getBoundingClientRect().bottom - paddingBottom - desired);
+  });
+
   root.querySelector<HTMLDetailsElement>(".completed-section.is-empty > summary")?.addEventListener("click", (event) => {
     event.preventDefault();
   });
@@ -372,5 +483,9 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
   render();
 }
 
+applyTheme();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (theme === "system") applyTheme();
+});
 render();
 void refreshTasks();
