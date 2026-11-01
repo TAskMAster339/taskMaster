@@ -289,6 +289,54 @@ fn due_reminders_fire_once_and_overdue_reminders_are_marked_missed() {
 }
 
 #[test]
+fn completing_task_clears_pending_reminder_and_completed_tasks_cannot_be_scheduled() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Завершить до встречи").unwrap();
+    store.set_reminder_at(&task.id, 5_000, 1_000).unwrap();
+
+    store.complete_task(&task.id).unwrap();
+
+    let completed = store
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == task.id)
+        .unwrap();
+    assert_eq!(completed.reminder_at, None);
+    assert_eq!(completed.reminder_state, None);
+    assert_eq!(
+        store
+            .count_events_for_task(&task.id, "reminder_cleared")
+            .unwrap(),
+        1
+    );
+    assert!(store.take_due_reminders(i64::MAX).unwrap().is_empty());
+    assert!(store.set_reminder_at(&task.id, 6_000, 1_000).is_err());
+}
+
+#[test]
+fn old_pending_reminders_on_completed_tasks_are_not_sent_and_are_cleared() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Уже выполнено").unwrap();
+    store.set_reminder_at(&task.id, 5_000, 1_000).unwrap();
+    store
+        .force_completed_with_pending_reminder_for_test(&task.id)
+        .unwrap();
+
+    assert!(store.take_due_reminders(5_000).unwrap().is_empty());
+    assert_eq!(store.clear_non_active_reminders(5_001).unwrap(), 1);
+
+    let completed = store
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == task.id)
+        .unwrap();
+    assert_eq!(completed.reminder_at, None);
+    assert_eq!(completed.reminder_state, None);
+}
+
+#[test]
 fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
     let database = TemporaryDatabase::new();
     let connection = Connection::open(&database.0).unwrap();

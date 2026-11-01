@@ -67,10 +67,30 @@ let reminderDialogError = "";
 let highlightedReminderTaskId: string | null = null;
 
 function reminderInputValue(timestamp: number | null): string {
-  if (timestamp === null) return "";
-  const date = new Date(timestamp);
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+  if (timestamp === null) return defaultReminderTimeValue();
+  return formatReminderTime(new Date(timestamp));
+}
+
+function formatReminderTime(date: Date): string {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function defaultReminderTimeValue(now = new Date()): string {
+  const reminderDate = new Date(now);
+  const needsNextMinute = now.getSeconds() > 0 || now.getMilliseconds() > 0;
+  reminderDate.setSeconds(0, 0);
+  reminderDate.setMinutes(reminderDate.getMinutes() + 15 + Number(needsNextMinute));
+  if (reminderDate.getFullYear() !== now.getFullYear()
+    || reminderDate.getMonth() !== now.getMonth()
+    || reminderDate.getDate() !== now.getDate()) return "";
+  return formatReminderTime(reminderDate);
+}
+
+function todayTimestampForTime(value: string): number {
+  const [hours, minutes] = value.split(":").map(Number);
+  const reminderDate = new Date();
+  reminderDate.setHours(hours, minutes, 0, 0);
+  return reminderDate.getTime();
 }
 
 function waitForMotion(milliseconds: number): Promise<void> {
@@ -364,7 +384,7 @@ function renderTask(task: Task, index: number, completed = false): string {
         <span aria-hidden="true">${completed ? "✓" : ""}</span>
       </button>
       <div class="task-content">${title}</div>
-      <button class="reminder-button ${task.reminderAt !== null ? "has-reminder" : ""}" type="button" data-edit-reminder="${task.id}" aria-label="${task.reminderAt !== null ? `Изменить напоминание: ${escapeHtml(task.title)}` : `Добавить напоминание: ${escapeHtml(task.title)}`}">${task.reminderAt !== null ? `<time>${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(task.reminderAt)}</time>` : "◷"}</button>
+      ${completed ? "" : `<button class="reminder-button ${task.reminderAt !== null ? "has-reminder" : ""}" type="button" data-edit-reminder="${task.id}" aria-label="${task.reminderAt !== null ? `Изменить напоминание: ${escapeHtml(task.title)}` : `Добавить напоминание: ${escapeHtml(task.title)}`}">${task.reminderAt !== null ? `<time>${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(task.reminderAt)}</time>` : "◷"}</button>`}
     </li>`;
 }
 
@@ -444,7 +464,7 @@ function render(allowDuringAnimation = false): void {
         ${reminderEditingTaskId ? (() => {
           const task = tasks.find((item) => item.id === reminderEditingTaskId);
           if (!task) return "";
-          return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Дата и время</label><input id="reminder-time" name="reminderAt" type="datetime-local" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
+          return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Время сегодня</label><input id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
         })() : ""}
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
@@ -542,7 +562,7 @@ function bindEvents(): void {
     const id = form.dataset.reminderForm;
     const value = new FormData(form).get("reminderAt");
     if (!id || typeof value !== "string") return;
-    const timestamp = new Date(value).getTime();
+    const timestamp = todayTimestampForTime(value);
     try {
       await invoke("set_task_reminder", { id, reminderAt: timestamp });
       reminderEditingTaskId = null;

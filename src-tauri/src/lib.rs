@@ -24,7 +24,7 @@ impl AppError {
     fn invalid_reminder_time() -> Self {
         Self {
             code: "invalid_reminder_time",
-            message: "Укажите время в будущем.".into(),
+            message: "Выберите время позже текущего.".into(),
         }
     }
     fn invalid_title() -> Self {
@@ -164,6 +164,7 @@ fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
         .as_millis() as i64;
     store.archive_expired_tasks(now)?;
     store.mark_missed_reminders(now)?;
+    store.clear_non_active_reminders(now)?;
     Ok(store)
 }
 

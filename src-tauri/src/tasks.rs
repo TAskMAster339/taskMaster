@@ -307,7 +307,7 @@ impl TaskStore {
         let Some((status, old_reminder_at, old_reminder_state)) = task else {
             return Err(not_found());
         };
-        if status == "archived" {
+        if status != "active" {
             return Err(AppError::invalid_state());
         }
         if old_reminder_at == Some(reminder_at) && old_reminder_state.as_deref() == Some("pending")
@@ -376,7 +376,7 @@ impl TaskStore {
         let mut statement = transaction
             .prepare(
                 "SELECT id, title, reminder_at FROM tasks
-                 WHERE reminder_state = 'pending' AND reminder_at <= ?1
+                 WHERE status = 'active' AND reminder_state = 'pending' AND reminder_at <= ?1
                  ORDER BY reminder_at, id",
             )
             .map_err(|_| AppError::storage())?;
@@ -454,15 +454,65 @@ impl TaskStore {
         Ok(overdue.len())
     }
 
+    pub fn clear_non_active_reminders(&self, now: i64) -> Result<usize, AppError> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, reminder_at FROM tasks
+                 WHERE status != 'active' AND reminder_state = 'pending'",
+            )
+            .map_err(|_| AppError::storage())?;
+        let reminders = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+            })
+            .map_err(|_| AppError::storage())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| AppError::storage())?;
+        drop(statement);
+
+        for (id, reminder_at) in &reminders {
+            transaction
+                .execute(
+                    "UPDATE tasks SET reminder_at = NULL, reminder_state = NULL
+                     WHERE id = ?1 AND status != 'active' AND reminder_state = 'pending'",
+                    [id],
+                )
+                .map_err(|_| AppError::storage())?;
+            record_event(
+                &transaction,
+                id,
+                "reminder_cleared",
+                now,
+                &serde_json::json!({ "reminderAt": reminder_at, "reason": "task_inactive" }),
+            )?;
+        }
+        transaction.commit().map_err(|_| AppError::storage())?;
+        Ok(reminders.len())
+    }
+
     pub fn complete_task(&self, id: &str) -> Result<(), AppError> {
         let transaction = self
             .connection
             .unchecked_transaction()
             .map_err(|_| AppError::storage())?;
         let now = now_millis();
+        let pending_reminder: Option<Option<i64>> = transaction
+            .query_row(
+                "SELECT reminder_at FROM tasks WHERE id = ?1 AND status = 'active' AND reminder_state = 'pending'",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| AppError::storage())?;
         let changed = transaction
             .execute(
-                "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1
+                "UPDATE tasks SET status = 'completed', completed_at = ?1, updated_at = ?1,
+                        reminder_at = CASE WHEN reminder_state = 'pending' THEN NULL ELSE reminder_at END,
+                        reminder_state = CASE WHEN reminder_state = 'pending' THEN NULL ELSE reminder_state END
                  WHERE id = ?2 AND status = 'active'",
                 params![now, id],
             )
@@ -475,8 +525,24 @@ impl TaskStore {
             };
         }
         compact_active_positions(&transaction)?;
+        if let Some(reminder_at) = pending_reminder {
+            record_event(
+                &transaction,
+                id,
+                "reminder_cleared",
+                now,
+                &serde_json::json!({ "reminderAt": reminder_at, "reason": "task_completed" }),
+            )?;
+        }
         record_event(&transaction, id, "completed", now, &serde_json::json!({}))?;
         transaction.commit().map_err(|_| AppError::storage())
+    }
+
+    #[cfg(test)]
+    pub fn force_completed_with_pending_reminder_for_test(&self, id: &str) -> rusqlite::Result<()> {
+        self.connection
+            .execute("UPDATE tasks SET status = 'completed' WHERE id = ?1", [id])?;
+        Ok(())
     }
 
     pub fn reopen_task(&self, id: &str) -> Result<(), AppError> {

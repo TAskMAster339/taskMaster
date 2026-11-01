@@ -130,15 +130,16 @@ h1 { margin-bottom: 7px; color: var(--text); font: 600 clamp(32px, 4vw, 44px)/1 
 .reminder-button time { font-size: 12px; font-variant-numeric: tabular-nums; }
 .task-row.is-reminder-highlighted { background: color-mix(in srgb, var(--obi) 18%, transparent); outline: 2px solid var(--obi); outline-offset: -2px; }
 .history-task-row.is-reminder-highlighted { background: color-mix(in srgb, var(--obi) 18%, transparent); outline: 2px solid var(--obi); outline-offset: -2px; }
-.reminder-dialog { width: min(420px, calc(100vw - 32px)); padding: 24px; border: 2px solid var(--ink); background: var(--paper); color: var(--ink); }
+.reminder-dialog { width: min(420px, calc(100vw - 32px)); padding: 24px; border: 2px solid var(--line-strong); background: var(--surface); color: var(--text); }
 .reminder-dialog::backdrop { background: rgb(0 0 0 / 52%); }
 .reminder-dialog h2 { margin: 0 0 18px; font-family: Oswald, sans-serif; font-size: 24px; }
 .reminder-dialog label { display: block; margin-bottom: 8px; }
-.reminder-dialog input { width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; }
+.reminder-dialog input { width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--line-strong); background: var(--surface-soft); color: var(--text); color-scheme: light; font: inherit; }
 .reminder-dialog-error { min-height: 1.5em; color: var(--obi); }
 .reminder-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.reminder-actions button { min-height: 42px; padding: 8px 12px; border: 1px solid var(--ink); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.reminder-actions button { min-height: 42px; padding: 8px 12px; border: 1px solid var(--line-strong); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
 .reminder-actions button[type="submit"] { background: var(--obi); color: var(--white); }
+:root[data-theme="dark"] .reminder-dialog input { color-scheme: dark; }
 .task-title { min-width: 0; max-width: 100%; display: block; overflow-wrap: anywhere; word-break: normal; color: var(--text); font-size: 16px; font-weight: 500; line-height: 1.5; text-decoration-color: transparent; transition: color .32s ease, text-decoration-color .55s ease; }
 .task-row.is-entering { animation: task-enter .55s ease-out both; }
 .task-row.is-entering .task-title { animation: title-reveal 1.35s cubic-bezier(.25,.7,.25,1) .14s both; }
