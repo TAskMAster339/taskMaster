@@ -9,6 +9,7 @@ Use this workflow for frontend changes in this repository.
 
 1. Read the relevant UI requirements in `ТЗ.md` and inspect existing screens/styles before changing them.
 2. Optimize for the core use: capture tasks quickly, arrange a manual queue, complete the next task, and glance at the current next task. Keep secondary controls quiet and avoid adding project-management complexity.
+2a. Keep interface copy literal and short. Do not add slogans, motivational phrases, redundant counts, or explanations of obvious controls; show text only when it communicates an action, state, error, or accessibility information.
 3. Preserve the specified interaction model: no calendar timeline, no mandatory task dates/durations, and no hidden auto-sorting. Time is optional for reminders; the focus timer is a separate explicit action.
 4. Provide clear empty, loading, saving/error, notification-permission, completed, archived, and timer states wherever they apply. Never imply a change was saved when the backend rejected it.
 5. Support light, dark, and system themes, keyboard operation, visible focus, accessible names, and a keyboard alternative to drag-and-drop reordering.

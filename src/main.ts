@@ -101,9 +101,7 @@ function render(): void {
              <button class="retry-button" type="button" data-retry-load>Повторить</button>
            </div>`
         : `<div class="empty-state">
-           <span class="empty-mark" aria-hidden="true">✳</span>
-           <strong>Пока чистый лист</strong>
-           <span>Добавьте первое дело — и начните с малого.</span>
+           <strong>Задач пока нет</strong>
          </div>`;
 
   root.innerHTML = `
@@ -120,11 +118,9 @@ function render(): void {
           <div>
             <p class="eyebrow">${escapeHtml(dateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date())}</p>
             <h1 id="page-title">План на день<span class="heading-period">.</span></h1>
-            <p class="date-line">Порядок задаёте вы.</p>
           </div>
-          <div class="day-progress" aria-label="Осталось ${active.length} задач">
+          <div class="day-progress" aria-label="Активных задач: ${active.length}">
             <span class="progress-count">${String(active.length).padStart(2, "0")}</span>
-            <span class="progress-label">ОСТАЛОСЬ</span>
           </div>
         </section>
 
@@ -143,9 +139,7 @@ function render(): void {
           <div class="section-heading">
             <div class="section-title-wrap">
               <h2 id="queue-title">Очередь</h2>
-              <span class="section-count">${active.length}</span>
             </div>
-            ${active.length > 0 ? "<span class=\"reorder-hint\">↕ РУЧНОЙ ПОРЯДОК</span>" : ""}
           </div>
           ${taskList}
         </section>
@@ -153,7 +147,6 @@ function render(): void {
         <details class="completed-section ${completed.length ? "" : "is-empty"}" ${completed.length ? "" : "aria-disabled=\"true\""}>
           <summary>
             <span class="summary-left"><span class="summary-chevron" aria-hidden="true">›</span><span>Выполнено</span><span class="section-count">${completed.length}</span></span>
-            ${completed.length ? '<span class="completed-summary">Отличная работа</span>' : ""}
           </summary>
           ${completed.length ? `<ol class="task-list completed-list" aria-label="Выполненные задачи">${completed.map((task, index) => renderTask(task, index, true)).join("")}</ol>` : ""}
         </details>
@@ -302,6 +295,13 @@ function bindEvents(): void {
         }
         dragPreview.style.left = `${Math.min(moveEvent.clientX + 12, Math.max(8, window.innerWidth - dragPreview.offsetWidth - 8))}px`;
         dragPreview.style.top = `${Math.min(moveEvent.clientY + 10, Math.max(8, window.innerHeight - dragPreview.offsetHeight - 8))}px`;
+        const list = row.closest<HTMLOListElement>(".task-list");
+        if (list) {
+          const bounds = list.getBoundingClientRect();
+          const edge = Math.min(48, bounds.height * 0.2);
+          if (moveEvent.clientY > bounds.bottom - edge) list.scrollTop += 12;
+          else if (moveEvent.clientY < bounds.top + edge) list.scrollTop -= 12;
+        }
         const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
         root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target", "drop-before", "drop-after"));
         if (target && target.dataset.taskId !== sourceId) {
