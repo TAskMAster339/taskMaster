@@ -155,7 +155,7 @@ function updateTimerVisuals(now: number): void {
     const progress = card?.querySelector<SVGCircleElement>(".timer-ring-progress");
     if (progress) {
       const ratio = timer.durationSeconds > 0 ? Math.min(1, remaining / timer.durationSeconds) : 0;
-      progress.style.strokeDashoffset = String(circumference * (1 - ratio));
+      progress.setAttribute("stroke-dashoffset", String(circumference * (1 - ratio)));
     }
   }
 }
@@ -464,7 +464,7 @@ function renderTask(task: Task, index: number, completed = false): string {
 function timerCard(timer: Timer, fullscreen = false): string {
   const progress = timer.durationSeconds > 0 ? timer.remainingSeconds / timer.durationSeconds : 0;
   const circumference = 2 * Math.PI * 86;
-  const ring = `<svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true"><circle class="timer-ring-track" cx="100" cy="100" r="86"/><circle class="timer-ring-progress" cx="100" cy="100" r="86" style="stroke-dasharray:${circumference} ${circumference};stroke-dashoffset:${circumference * (1 - progress)}"/></svg>`;
+  const ring = `<svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true"><circle class="timer-ring-track" cx="100" cy="100" r="86"/><circle class="timer-ring-progress" cx="100" cy="100" r="86" stroke-dasharray="${circumference} ${circumference}" stroke-dashoffset="${circumference * (1 - progress)}"/></svg>`;
   return `<article class="timer-card ${fullscreen ? "timer-card-focus" : ""}" data-timer-card="${timer.id}" data-timer-status="${timer.status}">
     <div class="timer-card-heading"><h2>${escapeHtml(timer.name)}</h2><div class="timer-card-actions">${fullscreen ? '<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="Выйти из полноэкранного режима"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>' : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="Открыть на весь экран">⛶</button><button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="Удалить таймер">×</button>`}</div></div>
     <div class="timer-dial">${ring}<strong class="timer-clock" data-timer-clock>${formatTimerTime(timer.remainingSeconds)}</strong></div>
