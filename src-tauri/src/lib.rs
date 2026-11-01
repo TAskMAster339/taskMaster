@@ -446,11 +446,11 @@ fn overlay_timer_window_size(timer_count: usize, max_width: f64) -> (f64, f64) {
     if timer_count == 0 {
         return (360.0, 154.0);
     }
-    let rows = timer_count.min(3);
-    let columns = timer_count.div_ceil(3);
-    let natural_width = 32.0 + columns as f64 * 88.0 + columns.saturating_sub(1) as f64 * 8.0;
+    let rows = timer_count.min(2);
+    let columns = timer_count.div_ceil(2);
+    let natural_width = 32.0 + columns as f64 * 280.0 + columns.saturating_sub(1) as f64 * 12.0;
     let width = natural_width.max(360.0).min(max_width.max(360.0));
-    let height = 154.0 + 20.0 + rows as f64 * 88.0 + rows.saturating_sub(1) as f64 * 8.0;
+    let height = 154.0 + 20.0 + rows as f64 * 280.0 + rows.saturating_sub(1) as f64 * 12.0;
     (width, height)
 }
 
@@ -616,6 +616,15 @@ fn complete_overlay_task(
 fn open_task_list(app: AppHandle) {
     show_main_window(&app);
     let _ = app.emit("overlay-open-today", ());
+}
+
+#[tauri::command]
+fn open_overlay_timer_focus(id: String, app: AppHandle) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.hide();
+    }
+    show_main_window(&app);
+    let _ = app.emit("overlay-open-timer-focus", id);
 }
 
 #[tauri::command]
@@ -794,6 +803,7 @@ pub fn run() {
             set_overlay_shortcut,
             complete_overlay_task,
             open_task_list,
+            open_overlay_timer_focus,
             resize_overlay_for_timers,
         ])
         .run(tauri::generate_context!())

@@ -103,12 +103,12 @@ body.overlay-mode #app { width: 100%; height: 100%; display: flex; flex-directio
 .overlay-failed strong { font: 600 18px/1.1 "Oswald", sans-serif; text-transform: uppercase; }
 .overlay-failed p { margin: 0; font-size: 11px; }
 .overlay-timer-area { min-width: 0; width: 100%; flex: 0 0 auto; padding: 8px 12px 12px; overflow-x: auto; overflow-y: hidden; scrollbar-color: var(--obi) var(--surface-soft); scrollbar-width: thin; }
-.overlay-timer-grid { width: max-content; display: grid; grid-auto-flow: column; grid-template-rows: repeat(3, 88px); grid-auto-columns: 88px; gap: 8px; }
-.overlay-timer { width: 88px; height: 88px; display: flex; flex-direction: column; justify-content: space-between; padding: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); overflow: hidden; }
-.overlay-timer strong { display: -webkit-box; overflow: hidden; overflow-wrap: anywhere; font-size: 11px; font-weight: 600; line-height: 1.25; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.overlay-timer time { color: var(--obi); font: 600 17px/1 "Oswald", sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.overlay-timer.is-entering { animation: overlay-timer-appear .42s cubic-bezier(.2,.8,.2,1) both; }
-.overlay-timer.is-evaporating { animation: overlay-timer-evaporate .88s ease-in forwards; }
+.overlay-timer-grid { width: max-content; display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, 280px); grid-auto-columns: 280px; gap: 12px; }
+.overlay-mode .timer-card-overlay { width: 280px; height: 280px; min-height: 280px; aspect-ratio: 1; flex: 0 0 280px; grid-template-rows: auto minmax(0, 1fr) auto; padding: 14px; }
+.timer-card-overlay .timer-clock { font-size: 32px; }
+.timer-card-overlay .timer-controls button { min-width: 44px; min-height: 44px; }
+.timer-card-overlay.is-entering { animation: overlay-timer-appear .42s cubic-bezier(.2,.8,.2,1) both; }
+.timer-card-overlay.is-evaporating { animation: overlay-timer-evaporate .88s ease-in forwards; pointer-events: none; }
 @keyframes overlay-timer-appear { from { opacity: 0; transform: translateY(12px) scale(.92); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes overlay-timer-evaporate { 0% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); } 65% { opacity: .65; transform: translateY(-8px) scale(.97); filter: blur(2px); } 100% { opacity: 0; transform: translateY(-24px) scale(.78); filter: blur(9px); } }
 

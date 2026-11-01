@@ -468,11 +468,11 @@ function renderTask(task: Task, index: number, completed = false): string {
     </li>`;
 }
 
-function timerCard(timer: Timer, fullscreen = false): string {
+function timerCard(timer: Timer, fullscreen = false, overlay = false): string {
   const progress = timer.durationSeconds > 0 ? timer.remainingSeconds / timer.durationSeconds : 0;
   const circumference = 2 * Math.PI * 86;
   const ring = `<svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true"><circle class="timer-ring-track" cx="100" cy="100" r="86"/><circle class="timer-ring-progress" cx="100" cy="100" r="86" stroke-dasharray="${circumference} ${circumference}" stroke-dashoffset="${circumference * (1 - progress)}"/></svg>`;
-  return `<article class="timer-card ${fullscreen ? "timer-card-focus" : ""}" data-timer-card="${timer.id}" data-timer-status="${timer.status}">
+  return `<article class="timer-card ${fullscreen ? "timer-card-focus" : ""} ${overlay ? "timer-card-overlay" : ""}" data-timer-card="${timer.id}" data-timer-status="${timer.status}">
     <div class="timer-card-heading"><h2>${escapeHtml(timer.name)}</h2><div class="timer-card-actions">${fullscreen ? '<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="Выйти из полноэкранного режима"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>' : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="Открыть на весь экран">⛶</button><button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="Удалить таймер">×</button>`}</div></div>
     <div class="timer-dial">${ring}<strong class="timer-clock" data-timer-clock>${formatTimerTime(timer.remainingSeconds)}</strong></div>
     <div class="timer-footer">
@@ -1067,12 +1067,33 @@ async function renderOverlay(): Promise<void> {
         ${overlayError ? `<p class="overlay-error" role="alert">${escapeHtml(overlayError)} <button type="button" data-overlay-retry>Повторить</button></p>` : ""}
       </section>`;
       if (displayTimers.length) {
-        overlayRoot.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="Запущенные таймеры"><div class="overlay-timer-grid">${displayTimers.map((timer) => `<article class="overlay-timer ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""}" aria-label="${escapeHtml(timer.name)}, ${timer.status === "finished" ? "завершён" : formatTimerTime(timer.remainingSeconds)}"><strong>${escapeHtml(timer.name)}</strong><time>${formatTimerTime(timer.remainingSeconds)}</time></article>`).join("")}</div></section>`);
+        overlayRoot.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="Запущенные таймеры"><div class="overlay-timer-grid">${displayTimers.map((timer) => timerCard(timer, false, true).replace('class="timer-card ', `class="timer-card ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""} `)).join("")}</div></section>`);
       }
       overlayRoot.querySelector<HTMLElement>(".overlay-header")?.addEventListener("pointerdown", (event) => {
         if (pinned || (event.target as HTMLElement).closest("button")) return;
         void getCurrentWindow().startDragging().catch((error: unknown) => { overlayError = backendMessage(error); });
       });
+      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-timer-action]").forEach((button) => button.addEventListener("click", async () => {
+        const id = button.dataset.timerId;
+        const action = button.dataset.timerAction;
+        if (!id || !action) return;
+        try {
+          if (action === "delete") await invoke("delete_timer", { id });
+          else if (action === "pause") await invoke("pause_timer", { id });
+          else if (action === "reset") await invoke("reset_timer", { id });
+          else {
+            const timer = displayTimers.find((item) => item.id === id);
+            if (timer?.status === "finished") await invoke("reset_timer", { id });
+            await invoke("start_timer", { id });
+          }
+          overlayError = "";
+          await load();
+        } catch (error) { overlayError = backendMessage(error); await load(); }
+      }));
+      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-timer-fullscreen]").forEach((button) => button.addEventListener("click", () => {
+        const id = button.dataset.timerFullscreen;
+        if (id) void invoke("open_overlay_timer_focus", { id });
+      }));
       overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-pin]")?.addEventListener("click", async () => {
         try { await invoke("set_overlay_pinned", { pinned: !pinned }); overlayError = ""; await load(); }
         catch (error) { overlayError = backendMessage(error); await load(); }
@@ -1189,6 +1210,12 @@ void listen("overlay-open-today", () => {
   window.history.pushState(null, "", "#today");
   render(true);
   root.querySelector<HTMLInputElement>("#new-task-title")?.focus();
+});
+void listen<string>("overlay-open-timer-focus", ({ payload }) => {
+  activeView = "timers";
+  fullscreenTimerId = payload;
+  window.history.pushState(null, "", "#timers");
+  void refreshTimers();
 });
 void listen<string>("overlay-shortcut-error", ({ payload }) => {
   overlayShortcutAvailable = false;
