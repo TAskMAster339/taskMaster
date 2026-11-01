@@ -70,13 +70,11 @@ function renderTask(task: Task, index: number, completed = false): string {
   const title = isEditing
     ? `<form class="rename-form" data-rename-form="${task.id}">
         <input class="rename-input" name="title" aria-label="Новое название задачи" value="${escapeHtml(task.title)}" required />
-        <button class="icon-button confirm-edit" type="submit" aria-label="Сохранить название">✓</button>
-        <button class="icon-button cancel-edit" type="button" data-cancel-edit="${task.id}" aria-label="Отменить изменение">×</button>
       </form>`
     : `<span class="task-title">${escapeHtml(task.title)}</span>`;
 
   return `
-    <li class="task-row ${completed ? "is-completed" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок."`}>
+    <li class="task-row ${completed ? "is-completed" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
       ${completed ? "" : `<span class="task-position" aria-label="Задача ${index + 1}">${String(index + 1).padStart(2, "0")}</span>`}
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
@@ -84,10 +82,7 @@ function renderTask(task: Task, index: number, completed = false): string {
         <span aria-hidden="true">${completed ? "✓" : ""}</span>
       </button>
       <div class="task-content">${title}</div>
-      ${completed
-        ? `<span class="completed-label">Готово</span>`
-        : `<span class="drag-handle" aria-hidden="true" title="Перетащить задачу">⠿</span>
-           <button class="icon-button edit-task" type="button" data-edit-task="${task.id}" aria-label="Изменить название: ${escapeHtml(task.title)}" title="Изменить название">✎</button>`}
+      ${completed ? `<span class="completed-label">Готово</span>` : ""}
     </li>`;
 }
 
@@ -242,17 +237,11 @@ function bindEvents(): void {
     });
   });
 
-  root.querySelectorAll<HTMLButtonElement>("[data-edit-task]").forEach((button) => {
-    button.addEventListener("click", () => {
-      editingTaskId = button.dataset.editTask ?? null;
+  root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
+    row.querySelector<HTMLElement>(".task-content")?.addEventListener("dblclick", () => {
+      if (editingTaskId === row.dataset.taskId) return;
+      editingTaskId = row.dataset.taskId ?? null;
       errorMessage = "";
-      render();
-    });
-  });
-
-  root.querySelectorAll<HTMLButtonElement>("[data-cancel-edit]").forEach((button) => {
-    button.addEventListener("click", () => {
-      editingTaskId = null;
       render();
     });
   });
@@ -270,6 +259,14 @@ function bindEvents(): void {
       }
       void perform(() => invoke("rename_task", { id: taskId, title }));
     });
+    form.querySelector<HTMLInputElement>(".rename-input")?.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      const taskId = form.dataset.renameForm;
+      editingTaskId = null;
+      render();
+      if (taskId) root.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(taskId)}"]`)?.focus();
+    });
   });
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
@@ -279,17 +276,37 @@ function bindEvents(): void {
       if (!sourceId) return;
       const startX = event.clientX;
       const startY = event.clientY;
+      let dragPreview: HTMLLIElement | null = null;
       mouseDragActive = false;
 
       const handleMouseMove = (moveEvent: MouseEvent): void => {
         if (!mouseDragActive && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) return;
         mouseDragActive = true;
         moveEvent.preventDefault();
+        window.getSelection()?.removeAllRanges();
         document.body.classList.add("is-task-dragging");
-        row.classList.add("is-dragging");
+        row.classList.add("is-drag-source");
+        if (!dragPreview) {
+          dragPreview = row.cloneNode(true) as HTMLLIElement;
+          dragPreview.classList.remove("is-drag-source", "drop-target", "drop-before", "drop-after");
+          dragPreview.classList.add("task-drag-preview");
+          dragPreview.dataset.reorderable = "false";
+          dragPreview.removeAttribute("data-task-id");
+          dragPreview.removeAttribute("tabindex");
+          dragPreview.removeAttribute("aria-label");
+          dragPreview.setAttribute("aria-hidden", "true");
+          dragPreview.querySelector<HTMLButtonElement>(".task-check")?.removeAttribute("disabled");
+          const bounds = row.getBoundingClientRect();
+          dragPreview.style.width = `${bounds.width}px`;
+          document.body.append(dragPreview);
+        }
+        dragPreview.style.left = `${Math.min(moveEvent.clientX + 12, Math.max(8, window.innerWidth - dragPreview.offsetWidth - 8))}px`;
+        dragPreview.style.top = `${Math.min(moveEvent.clientY + 10, Math.max(8, window.innerHeight - dragPreview.offsetHeight - 8))}px`;
         const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
-        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target"));
-        if (target && target.dataset.taskId !== sourceId) target.classList.add("drop-target");
+        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target", "drop-before", "drop-after"));
+        if (target && target.dataset.taskId !== sourceId) {
+          target.classList.add("drop-target", moveEvent.clientY < target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2 ? "drop-before" : "drop-after");
+        }
       };
 
       const handleMouseUp = (upEvent: MouseEvent): void => {
@@ -298,8 +315,9 @@ function bindEvents(): void {
         const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
         const targetId = target?.dataset.taskId;
         const shouldSave = mouseDragActive && targetId && targetId !== sourceId;
-        row.classList.remove("is-dragging");
-        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target"));
+        row.classList.remove("is-drag-source");
+        dragPreview?.remove();
+        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target", "drop-before", "drop-after"));
         document.body.classList.remove("is-task-dragging");
         mouseDragActive = false;
         if (!shouldSave || !target) return;
@@ -324,6 +342,12 @@ function bindEvents(): void {
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("keydown", (event) => {
+      if (event.key === "F2") {
+        event.preventDefault();
+        editingTaskId = row.dataset.taskId ?? null;
+        render();
+        return;
+      }
       if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
       event.preventDefault();
       const ids = activeTasks().map((task) => task.id);
