@@ -485,6 +485,9 @@ function bindEvents(): void {
       if (!sourceId) return;
       const startX = event.clientX;
       const startY = event.clientY;
+      const rowBounds = row.getBoundingClientRect();
+      const pointerOffsetX = event.clientX - rowBounds.left;
+      const pointerOffsetY = event.clientY - rowBounds.top;
       let dragPreview: HTMLLIElement | null = null;
       mouseDragActive = false;
 
@@ -509,8 +512,8 @@ function bindEvents(): void {
           dragPreview.style.width = `${bounds.width}px`;
           document.body.append(dragPreview);
         }
-        dragPreview.style.left = `${Math.min(moveEvent.clientX + 12, Math.max(8, window.innerWidth - dragPreview.offsetWidth - 8))}px`;
-        dragPreview.style.top = `${Math.min(moveEvent.clientY + 10, Math.max(8, window.innerHeight - dragPreview.offsetHeight - 8))}px`;
+        dragPreview.style.left = `${Math.min(Math.max(8, moveEvent.clientX - pointerOffsetX), Math.max(8, window.innerWidth - dragPreview.offsetWidth - 8))}px`;
+        dragPreview.style.top = `${Math.min(Math.max(8, moveEvent.clientY - pointerOffsetY), Math.max(8, window.innerHeight - dragPreview.offsetHeight - 8))}px`;
         const list = row.closest<HTMLOListElement>(".task-list");
         if (list) {
           const bounds = list.getBoundingClientRect();
