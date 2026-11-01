@@ -27,7 +27,7 @@ let saving = false;
 let errorMessage = "";
 let loadFailed = false;
 let editingTaskId: string | null = null;
-let pointerDragActive = false;
+let mouseDragActive = false;
 let announcement = "";
 
 const dateLabel = new Intl.DateTimeFormat("ru-RU", {
@@ -86,7 +86,8 @@ function renderTask(task: Task, index: number, completed = false): string {
       <div class="task-content">${title}</div>
       ${completed
         ? `<span class="completed-label">Готово</span>`
-        : `<button class="icon-button edit-task" type="button" data-edit-task="${task.id}" aria-label="Изменить название: ${escapeHtml(task.title)}" title="Изменить название">✎</button>`}
+        : `<span class="drag-handle" aria-hidden="true" title="Перетащить задачу">⠿</span>
+           <button class="icon-button edit-task" type="button" data-edit-task="${task.id}" aria-label="Изменить название: ${escapeHtml(task.title)}" title="Изменить название">✎</button>`}
     </li>`;
 }
 
@@ -154,15 +155,13 @@ function render(): void {
           ${taskList}
         </section>
 
-        ${completed.length
-          ? `<details class="completed-section">
-              <summary>
-                <span class="summary-left"><span class="summary-chevron" aria-hidden="true">›</span><span>Выполнено</span><span class="section-count">${completed.length}</span></span>
-                <span class="completed-summary">Отличная работа</span>
-              </summary>
-              <ol class="task-list completed-list" aria-label="Выполненные задачи">${completed.map((task, index) => renderTask(task, index, true)).join("")}</ol>
-            </details>`
-          : ""}
+        <details class="completed-section ${completed.length ? "" : "is-empty"}" ${completed.length ? "" : "aria-disabled=\"true\""}>
+          <summary>
+            <span class="summary-left"><span class="summary-chevron" aria-hidden="true">›</span><span>Выполнено</span><span class="section-count">${completed.length}</span></span>
+            ${completed.length ? '<span class="completed-summary">Отличная работа</span>' : ""}
+          </summary>
+          ${completed.length ? `<ol class="task-list completed-list" aria-label="Выполненные задачи">${completed.map((task, index) => renderTask(task, index, true)).join("")}</ol>` : ""}
+        </details>
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
     </div>`;
@@ -210,6 +209,10 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  root.querySelector<HTMLDetailsElement>(".completed-section.is-empty > summary")?.addEventListener("click", (event) => {
+    event.preventDefault();
+  });
+
   root.querySelector<HTMLButtonElement>("[data-retry-load]")?.addEventListener("click", () => {
     loading = true;
     errorMessage = "";
@@ -270,36 +273,39 @@ function bindEvents(): void {
   });
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
-    row.addEventListener("pointerdown", (event) => {
+    row.addEventListener("mousedown", (event) => {
       if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button, input, a"))) return;
       const sourceId = row.dataset.taskId;
       if (!sourceId) return;
       const startX = event.clientX;
       const startY = event.clientY;
-      pointerDragActive = false;
+      mouseDragActive = false;
 
-      const handlePointerMove = (moveEvent: PointerEvent): void => {
-        if (!pointerDragActive && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) return;
-        pointerDragActive = true;
+      const handleMouseMove = (moveEvent: MouseEvent): void => {
+        if (!mouseDragActive && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) return;
+        mouseDragActive = true;
         moveEvent.preventDefault();
+        document.body.classList.add("is-task-dragging");
         row.classList.add("is-dragging");
         const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
         root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target"));
         if (target && target.dataset.taskId !== sourceId) target.classList.add("drop-target");
       };
 
-      const handlePointerUp = (upEvent: PointerEvent): void => {
-        window.removeEventListener("pointermove", handlePointerMove);
-        window.removeEventListener("pointerup", handlePointerUp);
+      const handleMouseUp = (upEvent: MouseEvent): void => {
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
         const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
         const targetId = target?.dataset.taskId;
-        const shouldSave = pointerDragActive && targetId && targetId !== sourceId;
+        const shouldSave = mouseDragActive && targetId && targetId !== sourceId;
         row.classList.remove("is-dragging");
         root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target"));
-        pointerDragActive = false;
+        document.body.classList.remove("is-task-dragging");
+        mouseDragActive = false;
         if (!shouldSave || !target) return;
 
-        const ids = activeTasks().map((task) => task.id);
+        const originalIds = activeTasks().map((task) => task.id);
+        const ids = [...originalIds];
         const sourceIndex = ids.indexOf(sourceId);
         const targetIndex = ids.indexOf(targetId);
         if (sourceIndex < 0 || targetIndex < 0) return;
@@ -308,11 +314,11 @@ function bindEvents(): void {
         let destinationIndex = targetIndex - (sourceIndex < targetIndex ? 1 : 0) + (afterTarget ? 1 : 0);
         destinationIndex = Math.max(0, Math.min(destinationIndex, ids.length));
         ids.splice(destinationIndex, 0, sourceId);
-        if (ids.some((id, index) => id !== activeTasks()[index]?.id)) void saveOrder(ids, destinationIndex);
+        if (ids.some((id, index) => id !== originalIds[index])) void saveOrder(ids, destinationIndex);
       };
 
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp);
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
     });
   });
 
