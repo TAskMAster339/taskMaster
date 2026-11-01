@@ -38,6 +38,84 @@ fn creates_trimmed_tasks_in_manual_queue_order() {
 }
 
 #[test]
+fn focus_session_can_pause_resume_and_finish_with_elapsed_time() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Фокус").unwrap();
+    store.start_focus_at(&task.id, 60, 1_000).unwrap();
+    store.pause_focus_at(11_000).unwrap();
+    store.resume_focus_at(21_000).unwrap();
+    let finished = store.finish_focus_at(31_000).unwrap();
+    assert_eq!(finished.elapsed_seconds, 20);
+    assert_eq!(finished.status, "finished");
+    assert_eq!(finished.started_at, 1_000);
+    assert_eq!(finished.ended_at, Some(31_000));
+}
+
+#[test]
+fn task_with_live_focus_session_cannot_be_completed_until_session_is_resolved() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Таймер").unwrap();
+    store.start_focus_at(&task.id, 60, 1_000).unwrap();
+    assert!(store.complete_task(&task.id).is_err());
+    store.cancel_focus_at(2_000).unwrap();
+    store.complete_task(&task.id).unwrap();
+}
+
+#[test]
+fn focus_duration_is_limited_to_one_through_180_minutes_and_only_one_session_runs() {
+    let store = TaskStore::in_memory().unwrap();
+    let first = store.create_task("Первая").unwrap();
+    let second = store.create_task("Вторая").unwrap();
+    assert!(store.start_focus_at(&first.id, 59, 1_000).is_err());
+    assert!(store.start_focus_at(&first.id, 10_801, 1_000).is_err());
+    store.start_focus_at(&first.id, 60, 1_000).unwrap();
+    assert!(store.start_focus_at(&second.id, 60, 1_000).is_err());
+}
+
+#[test]
+fn focus_session_finishes_once_when_its_duration_expires() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Длительность").unwrap();
+    store.start_focus_at(&task.id, 60, 1_000).unwrap();
+    assert!(store.finish_expired_focus_at(60_999).unwrap().is_none());
+    let finished = store.finish_expired_focus_at(61_000).unwrap().unwrap();
+    assert_eq!(finished.elapsed_seconds, 60);
+    assert_eq!(finished.ended_at, Some(61_000));
+    assert!(store.finish_expired_focus_at(62_000).unwrap().is_none());
+}
+
+#[test]
+fn completed_task_history_includes_recorded_focus_duration() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Задача с фокусом").unwrap();
+    store.start_focus_at(&task.id, 3_600, 1_000).unwrap();
+    store.finish_focus_at(31_000).unwrap();
+    store.complete_task(&task.id).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let history = store.list_history_for_range(now - 1_000, now + 1).unwrap();
+    assert_eq!(history.completed[0].focus_seconds, 30);
+}
+
+#[test]
+fn focus_session_recovers_after_restart_and_can_be_discarded() {
+    let database = TemporaryDatabase::new();
+    let task_id;
+    {
+        let store = TaskStore::open(&database.0).unwrap();
+        task_id = store.create_task("Восстановление").unwrap().id;
+        store.start_focus_at(&task_id, 60, 1_000).unwrap();
+    }
+    let store = TaskStore::open(&database.0).unwrap();
+    let interrupted = store.recover_focus_at(6_000).unwrap().unwrap();
+    assert_eq!(interrupted.elapsed_seconds, 5);
+    store.cancel_focus_at(6_000).unwrap();
+    assert!(store.get_focus().unwrap().is_none());
+}
+
+#[test]
 fn rejects_empty_and_overlong_titles_without_creating_rows() {
     let store = TaskStore::in_memory().unwrap();
 
@@ -383,7 +461,7 @@ fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     assert_eq!(violations, 0);
 }
 

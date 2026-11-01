@@ -1,4 +1,9 @@
-use std::{collections::HashSet, path::Path, time::SystemTime};
+use std::{
+    collections::HashSet,
+    path::Path,
+    sync::Mutex,
+    time::{Instant, SystemTime},
+};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -71,6 +76,7 @@ pub struct HistoryTask {
     pub task: Task,
     pub occurred_at: i64,
     pub created_at: i64,
+    pub focus_seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,8 +86,23 @@ pub struct HistoryDay {
     pub archived: Vec<HistoryTask>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusSession {
+    pub task_id: String,
+    pub task_title: String,
+    pub duration_seconds: i64,
+    pub elapsed_seconds: i64,
+    pub status: String,
+    pub started_at: i64,
+    pub paused_at: Option<i64>,
+    pub running_since: i64,
+    pub ended_at: Option<i64>,
+}
+
 pub struct TaskStore {
     connection: Connection,
+    focus_clock: Mutex<Option<Instant>>,
 }
 
 impl TaskStore {
@@ -98,7 +119,7 @@ impl TaskStore {
     fn from_connection(connection: Connection) -> rusqlite::Result<Self> {
         let schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !(0..=3).contains(&schema_version) {
+        if !(0..=4).contains(&schema_version) {
             return Err(rusqlite::Error::InvalidQuery);
         }
 
@@ -167,7 +188,254 @@ impl TaskStore {
             )?;
             transaction.commit()?;
         }
-        Ok(Self { connection })
+        let migrated_version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if migrated_version == 3 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch(
+                "CREATE TABLE focus_sessions (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL REFERENCES tasks(id),
+                    duration_seconds INTEGER NOT NULL CHECK(duration_seconds BETWEEN 60 AND 10800),
+                    elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+                    started_at INTEGER NOT NULL,
+                    running_since INTEGER NOT NULL,
+                    paused_at INTEGER,
+                    ended_at INTEGER,
+                    status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'interrupted', 'finished', 'cancelled'))
+                 );
+                 CREATE UNIQUE INDEX one_live_focus_session ON focus_sessions((1))
+                     WHERE status IN ('active', 'paused', 'interrupted');
+                 PRAGMA user_version = 4;"
+            )?;
+            transaction.commit()?;
+        }
+        Ok(Self {
+            connection,
+            focus_clock: Mutex::new(None),
+        })
+    }
+
+    pub fn get_focus(&self) -> Result<Option<FocusSession>, AppError> {
+        let mut session = self.connection.query_row(
+            "SELECT f.task_id, t.title, f.duration_seconds, f.elapsed_seconds, f.status, f.started_at, f.paused_at, f.running_since, f.ended_at
+             FROM focus_sessions f JOIN tasks t ON t.id=f.task_id
+             WHERE f.status IN ('active','paused','interrupted') LIMIT 1", [], focus_from_row
+        ).optional().map_err(|_| AppError::storage())?;
+        if let Some(current) = session.as_mut()
+            && current.status == "active"
+        {
+            current.elapsed_seconds += self.focus_elapsed_millis().unwrap_or_default() / 1000;
+        }
+        Ok(session)
+    }
+
+    pub fn start_focus(
+        &self,
+        task_id: &str,
+        duration_seconds: i64,
+    ) -> Result<FocusSession, AppError> {
+        let session = self.start_focus_at(task_id, duration_seconds, now_millis())?;
+        *self.focus_clock.lock().map_err(|_| AppError::lock())? = Some(Instant::now());
+        Ok(session)
+    }
+    pub fn pause_focus(&self) -> Result<(), AppError> {
+        let elapsed = self.focus_elapsed_millis();
+        self.transition_focus("active", now_millis(), true, elapsed)
+    }
+    pub fn resume_focus(&self) -> Result<(), AppError> {
+        self.resume_focus_at(now_millis())?;
+        *self.focus_clock.lock().map_err(|_| AppError::lock())? = Some(Instant::now());
+        Ok(())
+    }
+    pub fn finish_focus(&self) -> Result<FocusSession, AppError> {
+        let elapsed = self.focus_elapsed_millis();
+        self.finish_focus_with_elapsed(now_millis(), elapsed)
+    }
+    pub fn cancel_focus(&self) -> Result<(), AppError> {
+        self.cancel_focus_at(now_millis())
+    }
+
+    pub fn start_focus_at(
+        &self,
+        task_id: &str,
+        duration_seconds: i64,
+        now: i64,
+    ) -> Result<FocusSession, AppError> {
+        if !(60..=10_800).contains(&duration_seconds) {
+            return Err(AppError::invalid_state());
+        }
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let title: Option<String> = tx
+            .query_row(
+                "SELECT title FROM tasks WHERE id=?1 AND status='active'",
+                [task_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|_| AppError::storage())?;
+        let title = title.ok_or_else(AppError::invalid_state)?;
+        let id = Uuid::new_v4().to_string();
+        tx.execute("INSERT INTO focus_sessions(id,task_id,duration_seconds,started_at,running_since,status) VALUES(?1,?2,?3,?4,?4,'active')", params![id,task_id,duration_seconds,now]).map_err(|_| AppError::invalid_state())?;
+        record_event(
+            &tx,
+            task_id,
+            "focus_started",
+            now,
+            &serde_json::json!({"durationSeconds":duration_seconds}),
+        )?;
+        tx.commit().map_err(|_| AppError::storage())?;
+        Ok(FocusSession {
+            task_id: task_id.into(),
+            task_title: title,
+            duration_seconds,
+            elapsed_seconds: 0,
+            status: "active".into(),
+            started_at: now,
+            paused_at: None,
+            running_since: now,
+            ended_at: None,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn pause_focus_at(&self, now: i64) -> Result<(), AppError> {
+        self.transition_focus("active", now, true, None)
+    }
+    pub fn resume_focus_at(&self, now: i64) -> Result<(), AppError> {
+        self.transition_focus("paused", now, false, None)
+    }
+    fn transition_focus(
+        &self,
+        from: &str,
+        now: i64,
+        pause: bool,
+        monotonic_elapsed_ms: Option<i64>,
+    ) -> Result<(), AppError> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let row: Option<(String, String, i64)> = tx
+            .query_row(
+                "SELECT id,task_id,running_since FROM focus_sessions WHERE status=?1",
+                [from],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(|_| AppError::storage())?;
+        let Some((id, task_id, running_since)) = row else {
+            return Err(AppError::invalid_state());
+        };
+        if pause {
+            let elapsed_seconds = monotonic_elapsed_ms
+                .unwrap_or_else(|| now.saturating_sub(running_since).max(0))
+                / 1000;
+            tx.execute("UPDATE focus_sessions SET elapsed_seconds=elapsed_seconds+?1, paused_at=?2, status='paused' WHERE id=?3", params![elapsed_seconds,now,id]).map_err(|_| AppError::storage())?;
+        } else {
+            tx.execute("UPDATE focus_sessions SET running_since=?1, paused_at=NULL, status='active' WHERE id=?2", params![now,id]).map_err(|_| AppError::storage())?;
+        }
+        record_event(
+            &tx,
+            &task_id,
+            if pause {
+                "focus_paused"
+            } else {
+                "focus_resumed"
+            },
+            now,
+            &serde_json::json!({}),
+        )?;
+        tx.commit().map_err(|_| AppError::storage())?;
+        if pause {
+            *self.focus_clock.lock().map_err(|_| AppError::lock())? = None;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn finish_focus_at(&self, now: i64) -> Result<FocusSession, AppError> {
+        self.finish_focus_with_elapsed(now, None)
+    }
+
+    fn finish_focus_with_elapsed(
+        &self,
+        now: i64,
+        monotonic_elapsed_ms: Option<i64>,
+    ) -> Result<FocusSession, AppError> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let mut s: FocusSession=tx.query_row("SELECT f.task_id,t.title,f.duration_seconds,f.elapsed_seconds,f.status,f.started_at,f.paused_at,f.running_since,f.ended_at FROM focus_sessions f JOIN tasks t ON t.id=f.task_id WHERE f.status IN ('active','paused','interrupted') LIMIT 1",[],focus_from_row).optional().map_err(|_| AppError::storage())?.ok_or_else(AppError::invalid_state)?;
+        if s.status == "active" {
+            s.elapsed_seconds += monotonic_elapsed_ms
+                .unwrap_or_else(|| now.saturating_sub(s.running_since).max(0))
+                / 1000;
+        }
+        s.elapsed_seconds = s.elapsed_seconds.min(s.duration_seconds);
+        s.status = "finished".into();
+        s.ended_at = Some(now);
+        tx.execute("UPDATE focus_sessions SET elapsed_seconds=?1,status='finished',paused_at=NULL,ended_at=?2 WHERE task_id=?3 AND status IN ('active','paused','interrupted')",params![s.elapsed_seconds,now,s.task_id]).map_err(|_| AppError::storage())?;
+        record_event(
+            &tx,
+            &s.task_id,
+            "focus_finished",
+            now,
+            &serde_json::json!({"elapsedSeconds":s.elapsed_seconds}),
+        )?;
+        tx.commit().map_err(|_| AppError::storage())?;
+        *self.focus_clock.lock().map_err(|_| AppError::lock())? = None;
+        Ok(s)
+    }
+
+    pub fn cancel_focus_at(&self, now: i64) -> Result<(), AppError> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let task: String=tx.query_row("SELECT task_id FROM focus_sessions WHERE status IN ('active','paused','interrupted') LIMIT 1",[],|r|r.get(0)).optional().map_err(|_|AppError::storage())?.ok_or_else(AppError::invalid_state)?;
+        tx.execute("UPDATE focus_sessions SET status='cancelled',ended_at=?2 WHERE task_id=?1 AND status IN ('active','paused','interrupted')",params![&task,now]).map_err(|_|AppError::storage())?;
+        record_event(&tx, &task, "focus_cancelled", now, &serde_json::json!({}))?;
+        tx.commit().map_err(|_| AppError::storage())?;
+        *self.focus_clock.lock().map_err(|_| AppError::lock())? = None;
+        Ok(())
+    }
+
+    pub fn recover_focus_at(&self, now: i64) -> Result<Option<FocusSession>, AppError> {
+        self.connection.execute("UPDATE focus_sessions SET elapsed_seconds=elapsed_seconds+MAX(0,(?1-running_since)/1000), status='interrupted', paused_at=?1 WHERE status='active'",[now]).map_err(|_|AppError::storage())?;
+        *self.focus_clock.lock().map_err(|_| AppError::lock())? = None;
+        self.get_focus()
+    }
+
+    pub fn finish_expired_focus_at(&self, now: i64) -> Result<Option<FocusSession>, AppError> {
+        let Some(session) = self.get_focus()? else {
+            return Ok(None);
+        };
+        let monotonic_elapsed_ms = self.focus_elapsed_millis();
+        let running_seconds = if monotonic_elapsed_ms.is_some() {
+            0
+        } else {
+            now.saturating_sub(session.running_since).max(0) / 1000
+        };
+        if session.status != "active"
+            || session.elapsed_seconds + running_seconds < session.duration_seconds
+        {
+            return Ok(None);
+        }
+        self.finish_focus_with_elapsed(now, monotonic_elapsed_ms)
+            .map(Some)
+    }
+
+    fn focus_elapsed_millis(&self) -> Option<i64> {
+        self.focus_clock
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|started| started.elapsed().as_millis() as i64)
     }
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, AppError> {
@@ -499,6 +767,13 @@ impl TaskStore {
             .connection
             .unchecked_transaction()
             .map_err(|_| AppError::storage())?;
+        let has_live_focus: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM focus_sessions WHERE task_id=?1 AND status IN ('active','paused','interrupted'))",
+            [id], |row| row.get(0),
+        ).map_err(|_| AppError::storage())?;
+        if has_live_focus {
+            return Err(AppError::invalid_state());
+        }
         let now = now_millis();
         let pending_reminder: Option<Option<i64>> = transaction
             .query_row(
@@ -661,7 +936,9 @@ impl TaskStore {
                 "SELECT t.id, t.title, t.status, t.position, t.created_at, t.updated_at,
                         t.completed_at, t.archived_at, t.reminder_at, t.reminder_state, MAX(e.occurred_at),
                         COALESCE((SELECT MIN(created.occurred_at) FROM task_events created
-                                  WHERE created.task_id = t.id AND created.kind = 'created'), t.created_at)
+                                  WHERE created.task_id = t.id AND created.kind = 'created'), t.created_at),
+                        COALESCE((SELECT SUM(f.elapsed_seconds) FROM focus_sessions f
+                                  WHERE f.task_id = t.id AND f.status = 'finished'), 0)
                  FROM task_events e JOIN tasks t ON t.id = e.task_id
                  WHERE e.kind = ?1 AND e.occurred_at >= ?2 AND e.occurred_at < ?3
                  GROUP BY t.id ORDER BY MAX(e.occurred_at) DESC, t.id",
@@ -689,6 +966,7 @@ impl TaskStore {
                     },
                     occurred_at: row.get(10)?,
                     created_at: row.get(11)?,
+                    focus_seconds: row.get(12)?,
                 })
             })
             .map_err(|_| AppError::storage())?;
@@ -815,6 +1093,20 @@ fn now_millis() -> i64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn focus_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FocusSession> {
+    Ok(FocusSession {
+        task_id: row.get(0)?,
+        task_title: row.get(1)?,
+        duration_seconds: row.get(2)?,
+        elapsed_seconds: row.get(3)?,
+        status: row.get(4)?,
+        started_at: row.get(5)?,
+        paused_at: row.get(6)?,
+        running_since: row.get(7)?,
+        ended_at: row.get(8)?,
+    })
 }
 
 fn task_exists(connection: &Connection, id: &str) -> Result<bool, AppError> {

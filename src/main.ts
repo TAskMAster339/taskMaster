@@ -21,10 +21,18 @@ interface Task {
   reminderState: "pending" | "fired" | "missed" | null;
 }
 
+interface FocusSession {
+  taskId: string; taskTitle: string; durationSeconds: number; elapsedSeconds: number;
+  status: "active" | "paused" | "interrupted"; startedAt: number; pausedAt: number | null;
+  runningSince: number;
+  endedAt: number | null;
+}
+
 interface HistoryTask {
   task: Task;
   occurredAt: number;
   createdAt: number;
+  focusSeconds: number;
 }
 
 interface HistoryDay {
@@ -65,6 +73,12 @@ const enteringTaskIds = new Set<string>();
 let reminderEditingTaskId: string | null = null;
 let reminderDialogError = "";
 let highlightedReminderTaskId: string | null = null;
+let focusSession: FocusSession | null = null;
+let focusBaseElapsedSeconds = 0;
+let focusClockStartedAt: number | null = null;
+let focusStartingTaskId: string | null = null;
+let focusError = "";
+let focusDisplaySeconds = 0;
 
 function reminderInputValue(timestamp: number | null): string {
   if (timestamp === null) return defaultReminderTimeValue();
@@ -96,6 +110,39 @@ function todayTimestampForTime(value: string): number {
 function waitForMotion(milliseconds: number): Promise<void> {
   const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : milliseconds;
   return new Promise((resolve) => window.setTimeout(resolve, duration));
+}
+
+function formatFocusTime(seconds: number): string {
+  const remaining = Math.max(0, seconds);
+  return `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
+}
+
+function formatFocusDuration(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes} мин` : `${seconds} с`;
+}
+
+function currentFocusElapsed(): number {
+  if (!focusSession) return 0;
+  const running = focusSession.status === "active" && focusClockStartedAt !== null
+    ? Math.floor((performance.now() - focusClockStartedAt) / 1000)
+    : 0;
+  return Math.min(focusSession.durationSeconds, focusBaseElapsedSeconds + Math.max(0, running));
+}
+
+async function refreshFocus(): Promise<void> {
+  try {
+    const previous = focusSession;
+    const next = await invoke<FocusSession | null>("get_focus_session");
+    const changed = !previous || !next || previous.taskId !== next.taskId || previous.startedAt !== next.startedAt || previous.status !== next.status;
+    focusSession = next;
+    if (changed) {
+      focusBaseElapsedSeconds = next?.elapsedSeconds ?? 0;
+      focusClockStartedAt = next?.status === "active" ? performance.now() : null;
+    }
+    focusDisplaySeconds = focusSession ? Math.max(0, focusSession.durationSeconds - currentFocusElapsed()) : 0;
+    focusError = "";
+  } catch (error) { focusError = backendMessage(error); }
 }
 
 function captureTaskPositions(): Map<string, string> {
@@ -345,8 +392,8 @@ function renderHistoryColumn(title: string, items: HistoryTask[], type: "complet
   const list = historyLoading
     ? `<li class="history-empty">Загружаем…</li>`
     : items.length
-      ? items.map(({ task, occurredAt, createdAt }) => `<li class="history-task-row ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""}" data-task-id="${task.id}">
-          <span class="history-task-title">${escapeHtml(task.title)}</span>
+      ? items.map(({ task, occurredAt, createdAt, focusSeconds }) => `<li class="history-task-row ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""}" data-task-id="${task.id}">
+          <span class="history-task-copy"><span class="history-task-title">${escapeHtml(task.title)}</span>${focusSeconds > 0 ? `<small>Фокус: ${formatFocusDuration(focusSeconds)}</small>` : ""}</span>
           <time>${formatTime(type === "completed" ? occurredAt : createdAt)}</time>
           ${type === "archived" && task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}" aria-label="Восстановить задачу: ${escapeHtml(task.title)}">↶</button>` : ""}
         </li>`).join("")
@@ -379,11 +426,12 @@ function renderTask(task: Task, index: number, completed = false): string {
     <li class="task-row ${completed ? "is-completed" : ""} ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
       <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
       <button class="task-check ${completed ? "checked" : ""}" type="button"
-        data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
-        aria-pressed="${completed}" ${saving || taskAnimationLocks.has(task.id) ? "disabled" : ""}>
+        data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : focusSession?.taskId === task.id ? "Сначала завершите фокус-таймер" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
+        aria-pressed="${completed}" ${saving || taskAnimationLocks.has(task.id) || (!completed && focusSession?.taskId === task.id) ? "disabled" : ""}>
         <span aria-hidden="true">${completed ? "✓" : ""}</span>
       </button>
       <div class="task-content">${title}</div>
+      ${completed ? "" : `<button class="focus-start-button" type="button" data-start-focus="${task.id}" aria-label="Запустить таймер для задачи: ${escapeHtml(task.title)}" ${focusSession ? "disabled" : ""}>▶</button>`}
       ${completed ? "" : `<button class="reminder-button ${task.reminderAt !== null ? "has-reminder" : ""}" type="button" data-edit-reminder="${task.id}" aria-label="${task.reminderAt !== null ? `Изменить напоминание: ${escapeHtml(task.title)}` : `Добавить напоминание: ${escapeHtml(task.title)}`}">${task.reminderAt !== null ? `<time>${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(task.reminderAt)}</time>` : "◷"}</button>`}
     </li>`;
 }
@@ -430,7 +478,7 @@ function render(allowDuringAnimation = false): void {
         </button>
       </aside>
 
-      <main class="main-content ${showingToday ? "is-today-view" : showingHistory ? "is-history-view" : "is-completed-view"}" id="${activeView}">
+      <main class="main-content ${showingToday ? "is-today-view" : showingHistory ? "is-history-view" : "is-completed-view"} ${focusSession ? "has-focus-session" : ""}" id="${activeView}">
         <section class="day-heading" aria-labelledby="page-title">
           <div>
             <p class="eyebrow">${escapeHtml(headingDateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(headingDate)}</p>
@@ -452,6 +500,14 @@ function render(allowDuringAnimation = false): void {
           <span aria-hidden="true">!</span> ${escapeHtml(errorMessage)}
         </p>
 
+        ${focusSession ? `<section class="focus-panel" aria-label="Фокус-таймер">
+          <div><span class="focus-task-title">${escapeHtml(focusSession.taskTitle)}</span><strong class="focus-clock" aria-live="off">${formatFocusTime(focusDisplaySeconds)}</strong></div>
+          <div class="focus-actions">
+            ${focusSession.status === "active" ? '<button type="button" data-pause-focus>Пауза</button>' : focusSession.status === "paused" ? '<button type="button" data-resume-focus>Продолжить</button>' : '<span role="status">Сессия прервана</span>'}
+            <button type="button" data-finish-focus>Сохранить</button><button type="button" data-cancel-focus>Отбросить сессию</button>
+          </div><p role="alert" ${focusError ? "" : "hidden"}>${escapeHtml(focusError)}</p>
+        </section>` : ""}
+
         <section class="queue-section" aria-labelledby="queue-title">
           <div class="section-heading" ${showingHistory ? "hidden" : ""}>
             <div class="section-title-wrap">
@@ -466,6 +522,7 @@ function render(allowDuringAnimation = false): void {
           if (!task) return "";
           return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Время сегодня</label><input id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
         })() : ""}
+        ${focusStartingTaskId ? `<dialog class="reminder-dialog" data-focus-dialog><form data-focus-form="${focusStartingTaskId}"><h2>Фокус-таймер</h2><label for="focus-duration">Длительность, минут</label><input id="focus-duration" name="duration" type="number" min="1" max="180" value="30" required/><div class="reminder-actions"><button type="button" data-close-focus>Отмена</button><button type="submit">Начать</button></div></form></dialog>` : ""}
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
     </div>`;
@@ -475,6 +532,8 @@ function render(allowDuringAnimation = false): void {
   animateEnteringTasks();
   const reminderDialog = root.querySelector<HTMLDialogElement>("[data-reminder-dialog]");
   if (reminderDialog && !reminderDialog.open) reminderDialog.showModal();
+  const focusDialog = root.querySelector<HTMLDialogElement>("[data-focus-dialog]");
+  if (focusDialog && !focusDialog.open) focusDialog.showModal();
   if (editingTaskId) {
     const input = root.querySelector<HTMLInputElement>(".rename-input");
     input?.focus();
@@ -485,6 +544,7 @@ function render(allowDuringAnimation = false): void {
 async function refreshTasks(): Promise<void> {
   try {
     tasks = await invoke<Task[]>("list_tasks");
+    await refreshFocus();
     errorMessage = "";
     loadFailed = false;
   } catch (error) {
@@ -544,6 +604,29 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-start-focus]").forEach((button) => button.addEventListener("click", () => {
+    focusStartingTaskId = button.dataset.startFocus ?? null;
+    render(true);
+  }));
+  root.querySelector<HTMLButtonElement>("[data-close-focus]")?.addEventListener("click", () => { focusStartingTaskId = null; render(true); });
+  root.querySelector<HTMLFormElement>("[data-focus-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const duration = Number(new FormData(form).get("duration"));
+    const id = form.dataset.focusForm;
+    if (!id || !Number.isInteger(duration) || duration < 1 || duration > 180) return;
+    try {
+      focusSession = await invoke<FocusSession>("start_focus", { id, durationSeconds: duration * 60 });
+      focusBaseElapsedSeconds = 0;
+      focusClockStartedAt = performance.now();
+      focusStartingTaskId = null;
+      await refreshFocus(); render(true);
+    } catch (error) { focusError = backendMessage(error); focusStartingTaskId = null; errorMessage = focusError; render(true); }
+  });
+  root.querySelector<HTMLButtonElement>("[data-pause-focus]")?.addEventListener("click", async () => { try { await invoke("pause_focus"); await refreshFocus(); render(true); } catch (e) { focusError = backendMessage(e); render(true); } });
+  root.querySelector<HTMLButtonElement>("[data-resume-focus]")?.addEventListener("click", async () => { try { await invoke("resume_focus"); await refreshFocus(); render(true); } catch (e) { focusError = backendMessage(e); render(true); } });
+  root.querySelector<HTMLButtonElement>("[data-finish-focus]")?.addEventListener("click", async () => { try { const done = await invoke<FocusSession>("finish_focus"); focusSession = null; announcement = `Сессия сохранена: ${formatFocusDuration(done.elapsedSeconds)}.`; render(true); } catch (e) { focusError = backendMessage(e); render(true); } });
+  root.querySelector<HTMLButtonElement>("[data-cancel-focus]")?.addEventListener("click", async () => { try { await invoke("cancel_focus"); focusSession = null; announcement = "Сессия отменена."; render(true); } catch (e) { focusError = backendMessage(e); render(true); } });
   root.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", () => {
     reminderEditingTaskId = button.dataset.editReminder ?? null;
     reminderDialogError = "";
@@ -858,6 +941,14 @@ void listen("reminder-runtime-error", () => {
   errorMessage = "Не удалось обработать напоминание. Перезапустите приложение.";
   render(true);
 });
+void listen("focus-runtime-error", () => {
+  focusError = "Не удалось сохранить состояние фокус-таймера. Проверьте хранилище данных.";
+  render(true);
+});
+void listen("focus-notification-error", () => {
+  focusError = "Не удалось показать уведомление о завершении таймера.";
+  render(true);
+});
 render();
 void refreshTasks();
 if (activeView === "history") void refreshHistory();
@@ -873,3 +964,15 @@ window.setInterval(async () => {
     render();
   }
 }, 60_000);
+window.setInterval(() => {
+  if (!focusSession || focusSession.status !== "active") return;
+  focusDisplaySeconds = Math.max(0, focusSession.durationSeconds - currentFocusElapsed());
+  const clock = root.querySelector<HTMLElement>(".focus-clock");
+  if (clock) clock.textContent = formatFocusTime(focusDisplaySeconds);
+}, 1_000);
+void listen<FocusSession>("focus-session-finished", async ({ payload }) => {
+  focusSession = payload;
+  announcement = `Фокус-сессия завершена: ${payload.taskTitle}.`;
+  await refreshFocus();
+  render(true);
+});

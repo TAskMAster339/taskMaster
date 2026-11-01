@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::Serialize;
-use tasks::{DueReminder, HistoryDay, Task, TaskStore};
+use tasks::{DueReminder, FocusSession, HistoryDay, Task, TaskStore};
 use tauri::{
     AppHandle, Emitter, Manager, State, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder},
@@ -154,6 +154,37 @@ fn clear_task_reminder(id: String, state: State<'_, AppState>) -> Result<(), App
     with_store(&state, |store| store.clear_reminder(&id))
 }
 
+#[tauri::command]
+fn get_focus_session(state: State<'_, AppState>) -> Result<Option<FocusSession>, AppError> {
+    with_store(&state, TaskStore::get_focus)
+}
+
+#[tauri::command]
+fn start_focus(
+    id: String,
+    duration_seconds: i64,
+    state: State<'_, AppState>,
+) -> Result<FocusSession, AppError> {
+    with_store(&state, |store| store.start_focus(&id, duration_seconds))
+}
+
+#[tauri::command]
+fn pause_focus(state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |s| s.pause_focus())
+}
+#[tauri::command]
+fn resume_focus(state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |s| s.resume_focus())
+}
+#[tauri::command]
+fn finish_focus(state: State<'_, AppState>) -> Result<FocusSession, AppError> {
+    with_store(&state, |s| s.finish_focus())
+}
+#[tauri::command]
+fn cancel_focus(state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |s| s.cancel_focus())
+}
+
 fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
     std::fs::create_dir_all(&path).map_err(|_| AppError::storage())?;
     let store =
@@ -165,6 +196,7 @@ fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
     store.archive_expired_tasks(now)?;
     store.mark_missed_reminders(now)?;
     store.clear_non_active_reminders(now)?;
+    store.recover_focus_at(now)?;
     Ok(store)
 }
 
@@ -181,19 +213,33 @@ fn notify_reminder(app: &AppHandle, reminder: DueReminder) {
         .ok();
 }
 
+fn notify_focus_finished(app: &AppHandle, session: FocusSession) {
+    use tauri_plugin_notification::NotificationExt;
+    if app
+        .notification()
+        .builder()
+        .title("Фокус-таймер завершён")
+        .body(&session.task_title)
+        .show()
+        .is_err()
+    {
+        let _ = app.emit("focus-notification-error", ());
+    }
+    let _ = app.emit("focus-session-finished", session);
+}
+
 fn register_notification_actions(app: &AppHandle) {
     use tauri_plugin_notification::NotificationExt;
     let handle = app.clone();
     let _ = app.notification().on_action(move |action| {
-        if action.action_id() == "tap" {
-            if let Some(id) = action
+        if action.action_id() == "tap"
+            && let Some(id) = action
                 .notification()
                 .and_then(|n| n.extra().get("taskId"))
                 .and_then(|v| v.as_str())
-            {
-                show_main_window(&handle);
-                let _ = handle.emit("reminder-open-task", id.to_owned());
-            }
+        {
+            show_main_window(&handle);
+            let _ = handle.emit("reminder-open-task", id.to_owned());
         }
     });
 }
@@ -224,16 +270,26 @@ fn start_reminder_scheduler(app: AppHandle) {
                 let _ = app.emit("reminder-runtime-error", ());
                 continue;
             }
-            match store.take_due_reminders(now) {
-                Ok(reminders) => {
-                    drop(guard);
-                    for reminder in reminders {
-                        notify_reminder(&app, reminder);
-                    }
-                }
+            let reminders = match store.take_due_reminders(now) {
+                Ok(reminders) => reminders,
                 Err(_) => {
                     let _ = app.emit("reminder-runtime-error", ());
+                    Vec::new()
                 }
+            };
+            let finished_focus = match store.finish_expired_focus_at(now) {
+                Ok(session) => session,
+                Err(_) => {
+                    let _ = app.emit("focus-runtime-error", ());
+                    None
+                }
+            };
+            drop(guard);
+            for reminder in reminders {
+                notify_reminder(&app, reminder);
+            }
+            if let Some(session) = finished_focus {
+                notify_focus_finished(&app, session);
             }
         }
     });
@@ -330,7 +386,13 @@ pub fn run() {
             list_task_creation_times,
             restore_task,
             set_task_reminder,
-            clear_task_reminder
+            clear_task_reminder,
+            get_focus_session,
+            start_focus,
+            pause_focus,
+            resume_focus,
+            finish_focus,
+            cancel_focus
         ])
         .run(tauri::generate_context!())
         .expect("failed to run taskMaster");
