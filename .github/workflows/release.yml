@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   release:
-    name: Build and publish Windows executable
+    name: Build and publish Windows installers
     runs-on: windows-latest
     steps:
       - name: Check out repository
@@ -57,8 +57,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Could not check previous changelog archive pull requests." }
           if ($pending) { throw "Merge the previous changelog archive pull request before publishing another release: $pending" }
 
-      - name: Build Windows executable
-        run: npm run tauri -- build --no-bundle
+      - name: Build Windows executable and MSI installer
+        run: npm run tauri -- build --bundles msi
 
       - name: Prepare release notes and metadata
         id: release
@@ -102,18 +102,22 @@ jobs:
           RELEASE_NOTES: ${{ steps.release.outputs.notes_path }}
         run: |
           $binary = Resolve-Path 'src-tauri/target/release/taskmaster.exe'
+          $msi = Get-ChildItem 'src-tauri/target/release/bundle/msi' -Filter '*.msi' | Select-Object -First 1
+          if (-not $msi) { throw "MSI installer was not produced." }
           $datedBinary = Join-Path $env:RUNNER_TEMP "taskMaster-$env:RELEASE_VERSION-windows-x64.exe"
+          $datedMsi = Join-Path $env:RUNNER_TEMP "taskMaster-$env:RELEASE_VERSION-windows-x64.msi"
           Copy-Item -LiteralPath $binary -Destination $datedBinary
+          Copy-Item -LiteralPath $msi.FullName -Destination $datedMsi
           $title = "taskMaster $env:RELEASE_VERSION ($env:RELEASE_DATE)"
 
           $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
           if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
           if ($releaseTags -contains $env:RELEASE_TAG) {
-            gh release upload $env:RELEASE_TAG $datedBinary --clobber
+            gh release upload $env:RELEASE_TAG $datedBinary $datedMsi --clobber
             if ($LASTEXITCODE -ne 0) { throw "Could not update dated release asset." }
             gh release edit $env:RELEASE_TAG --title $title --notes-file $env:RELEASE_NOTES --latest=false
           } else {
-            gh release create $env:RELEASE_TAG $datedBinary --title $title --notes-file $env:RELEASE_NOTES --latest=false
+            gh release create $env:RELEASE_TAG $datedBinary $datedMsi --title $title --notes-file $env:RELEASE_NOTES --latest=false
           }
           if ($LASTEXITCODE -ne 0) { throw "Could not publish dated version release." }
 
@@ -126,8 +130,12 @@ jobs:
           RELEASE_NOTES: ${{ steps.release.outputs.notes_path }}
         run: |
           $binary = Resolve-Path 'src-tauri/target/release/taskmaster.exe'
+          $msi = Get-ChildItem 'src-tauri/target/release/bundle/msi' -Filter '*.msi' | Select-Object -First 1
+          if (-not $msi) { throw "MSI installer was not produced." }
           $latestBinary = Join-Path $env:RUNNER_TEMP 'taskMaster-windows-x64.exe'
+          $latestMsi = Join-Path $env:RUNNER_TEMP 'taskMaster-windows-x64.msi'
           Copy-Item -LiteralPath $binary -Destination $latestBinary
+          Copy-Item -LiteralPath $msi.FullName -Destination $latestMsi
           $title = "taskMaster latest — $env:RELEASE_VERSION ($env:RELEASE_DATE)"
 
           $latestRef = "$($env:GITHUB_SHA):refs/tags/latest"
@@ -137,11 +145,11 @@ jobs:
           $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
           if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
           if ($releaseTags -contains 'latest') {
-            gh release upload latest $latestBinary --clobber
+            gh release upload latest $latestBinary $latestMsi --clobber
             if ($LASTEXITCODE -ne 0) { throw "Could not upload executable to the latest release." }
             gh release edit latest --title $title --notes-file $env:RELEASE_NOTES --latest
           } else {
-            gh release create latest $latestBinary --title $title --notes-file $env:RELEASE_NOTES --latest
+            gh release create latest $latestBinary $latestMsi --title $title --notes-file $env:RELEASE_NOTES --latest
           }
           if ($LASTEXITCODE -ne 0) { throw "Could not update the latest release." }
 

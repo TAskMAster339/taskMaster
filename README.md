@@ -45,11 +45,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Start-TaskMaster.ps1
 .\scripts\Start-TaskMaster.ps1 -BuildOnly
 ```
 
-Готовый исполняемый файл находится в `src-tauri\target\release\taskmaster.exe`. Скрипт собирает приложение без установщика. Команды Tauri напрямую также доступны: `npm run tauri -- dev`, `npm run tauri -- build --no-bundle`.
+Готовый исполняемый файл находится в `src-tauri\target\release\taskmaster.exe`. Скрипт собирает приложение без установщика. Для локальной сборки MSI используйте `npm run tauri -- build --bundles msi` (требуется Windows). Команды Tauri напрямую также доступны: `npm run tauri -- dev`, `npm run tauri -- build --no-bundle`.
 
 ## CI и релизы GitHub
 
-Workflow `CI` запускается при push и pull request и выполняет Rust format/test/Clippy и production-сборку frontend на Windows runner. Ручной workflow `Publish Release` доступен во вкладке **Actions** на default branch. Он повторно выполняет эти проверки, собирает `.exe`, публикует release с версией и датой в теге и обновляет release с тегом `latest`.
+Workflow `CI` запускается при push и pull request и выполняет Rust format/test/Clippy и production-сборку frontend на Windows runner. Ручной workflow `Publish Release` доступен во вкладке **Actions** на default branch. Он повторно выполняет эти проверки, собирает `.exe` и MSI-установщик, прикладывает оба файла к release с версией и датой в теге и к release с тегом `latest`.
 
 Перед запуском внесите заметные изменения в `CHANGELOG.md` в секцию `Unreleased`. После успешной публикации workflow открывает PR с переносом этих записей в секцию выпущенной версии и даты. История сохраняется, а `Unreleased` становится пустой после слияния PR. Проверьте и влейте этот PR перед следующим релизом. Если публикация завершается ошибкой, PR не создаётся и записи остаются для повторного запуска.
 
