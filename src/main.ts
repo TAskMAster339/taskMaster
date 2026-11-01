@@ -54,7 +54,6 @@ let activeView: View = window.location.hash === "#completed" ? "completed" : win
 let historyDay: HistoryDay = { completed: [], archived: [] };
 let createdTaskDays = new Set<string>();
 let historyLoading = false;
-let historyQuery = "";
 const yesterday = new Date();
 yesterday.setDate(yesterday.getDate() - 1);
 let selectedHistoryDate = toLocalDateString(yesterday);
@@ -284,11 +283,6 @@ function formatTime(timestamp: number): string {
   return new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
 }
 
-function filteredDayTasks(items: HistoryTask[]): HistoryTask[] {
-  const query = historyQuery.trim().toLocaleLowerCase("ru-RU");
-  return items.filter(({ task }) => !query || task.title.toLocaleLowerCase("ru-RU").includes(query));
-}
-
 function renderCalendar(): string {
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -312,18 +306,17 @@ function renderCalendar(): string {
 }
 
 function renderHistoryColumn(title: string, items: HistoryTask[], type: "completed" | "archived"): string {
-  const visible = filteredDayTasks(items);
   const list = historyLoading
     ? `<li class="history-empty">Загружаем…</li>`
-    : visible.length
-      ? visible.map(({ task, occurredAt, createdAt }) => `<li class="history-task-row">
+    : items.length
+      ? items.map(({ task, occurredAt, createdAt }) => `<li class="history-task-row">
           <span class="history-task-title">${escapeHtml(task.title)}</span>
           <time>${formatTime(type === "completed" ? occurredAt : createdAt)}</time>
           ${type === "archived" && task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}" aria-label="Восстановить задачу: ${escapeHtml(task.title)}">↶</button>` : ""}
         </li>`).join("")
-      : `<li class="history-empty">${historyQuery ? "Задачи не найдены" : "Нет задач"}</li>`;
+      : `<li class="history-empty">Нет задач</li>`;
   return `<section class="history-column history-column-${type}" aria-labelledby="history-${type}-title">
-    <div class="history-column-heading"><h2 id="history-${type}-title">${title}</h2><span>${visible.length}</span></div>
+    <div class="history-column-heading"><h2 id="history-${type}-title">${title}</h2><span>${items.length}</span></div>
     <ul class="history-task-list">${list}</ul>
   </section>`;
 }
@@ -367,7 +360,7 @@ function render(allowDuringAnimation = false): void {
   const showingCompleted = activeView === "completed";
   const showingHistory = activeView === "history";
   const visibleTasks = showingToday ? active : completedToday;
-  const historyCount = filteredDayTasks(historyDay.completed).length + filteredDayTasks(historyDay.archived).length;
+  const historyCount = historyDay.completed.length + historyDay.archived.length;
   const headingDate = showingHistory ? parseLocalDate(selectedHistoryDate) : new Date();
   const headingDateLabel = new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" }).format(headingDate);
   const taskList = showingHistory
@@ -418,9 +411,6 @@ function render(allowDuringAnimation = false): void {
           <button class="add-button" type="submit" aria-label="Добавить задачу" ${saving ? "disabled" : ""}>＋</button>
         </form>` : ""}
 
-        ${showingHistory ? renderCalendar() : ""}
-        ${showingHistory ? `<div class="history-controls"><label><span class="visually-hidden">Поиск задач</span><input type="search" data-history-search placeholder="Поиск задач" value="${escapeHtml(historyQuery)}" /></label></div>` : ""}
-
         <p class="error-banner" role="alert" ${errorMessage ? "" : "hidden"}>
           <span aria-hidden="true">!</span> ${escapeHtml(errorMessage)}
         </p>
@@ -433,6 +423,7 @@ function render(allowDuringAnimation = false): void {
           </div>
           ${showingHistory ? `<div class="history-list-container">${historyLoading ? '<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем список…</span></div>' : taskList}</div>` : taskList}
         </section>
+        ${showingHistory ? renderCalendar() : ""}
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
     </div>`;
@@ -521,19 +512,6 @@ function bindEvents(): void {
     });
   });
 
-  const updateHistoryResults = (): void => {
-    const list = root.querySelector<HTMLElement>(".history-list-container");
-    if (list) list.innerHTML = renderHistoryLists();
-    const count = filteredDayTasks(historyDay.completed).length + filteredDayTasks(historyDay.archived).length;
-    const progressCount = root.querySelector<HTMLElement>(".progress-count");
-    const progress = root.querySelector<HTMLElement>(".day-progress");
-    if (progressCount) progressCount.textContent = String(count).padStart(2, "0");
-    progress?.setAttribute("aria-label", `Задач в истории: ${count}`);
-  };
-  root.querySelector<HTMLInputElement>("[data-history-search]")?.addEventListener("input", (event) => {
-    historyQuery = (event.currentTarget as HTMLInputElement).value;
-    updateHistoryResults();
-  });
   root.querySelectorAll<HTMLButtonElement>("[data-calendar-date]").forEach((button) => {
     button.addEventListener("click", () => {
       const value = button.dataset.calendarDate;
