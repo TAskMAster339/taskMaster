@@ -8,6 +8,7 @@ description: Use when defining or revising Taskmaster's visual direction, screen
 Use this workflow for product and visual design decisions; use `$taskmaster-ui` when directly implementing frontend code.
 
 1. Read the relevant user scenario and UI constraints in `ТЗ.md`, then inspect the current interface and reusable components if they exist. Design for the actual small, single-user daily-planning workflow.
+1a. Read `DESIGN.md` before making visual decisions. Keep new work aligned with its palette, typography, component states, and motion rules; revise it when the user approves a lasting visual-system change.
 2. Define the screen's purpose, primary action, information hierarchy, and important states before choosing decoration. Keep capture, manual ordering, completion, focus timing, history, and the next-task overlay easy to distinguish.
 2a. Use concise, literal interface copy. Avoid slogans, motivational phrases, redundant counters, and decorative explanations; add copy only when it clarifies an action, state, error, or accessibility need.
 3. Preserve the product's minimal interaction model: a clear task queue, optional reminder time, explicit focus timer, and no project-management dashboard or calendar timeline.

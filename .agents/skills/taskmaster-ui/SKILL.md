@@ -8,6 +8,7 @@ description: Use when designing or changing Taskmaster screens, task rows, overl
 Use this workflow for frontend changes in this repository.
 
 1. Read the relevant UI requirements in `ТЗ.md` and inspect existing screens/styles before changing them.
+1a. Read `DESIGN.md` before changing visual styling. Treat its palette, typography, component states, and motion rules as the shared system; update the document when a requested change revises that system.
 2. Optimize for the core use: capture tasks quickly, arrange a manual queue, complete the next task, and glance at the current next task. Keep secondary controls quiet and avoid adding project-management complexity.
 2a. Keep interface copy literal and short. Do not add slogans, motivational phrases, redundant counts, or explanations of obvious controls; show text only when it communicates an action, state, error, or accessibility information.
 3. Preserve the specified interaction model: no calendar timeline, no mandatory task dates/durations, and no hidden auto-sorting. Time is optional for reminders; the focus timer is a separate explicit action.

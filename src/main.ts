@@ -102,9 +102,9 @@ async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button:
   if (mark) mark.textContent = "✓";
   row.classList.add("is-completing");
 
-  await waitForMotion(150);
+  await waitForMotion(450);
   row.classList.add("is-striking");
-  await waitForMotion(230);
+  await waitForMotion(650);
   const height = row.getBoundingClientRect().height;
   row.style.height = `${height}px`;
   row.style.overflow = "hidden";
@@ -114,7 +114,7 @@ async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button:
     row.style.paddingBlock = "0px";
     row.style.borderBottomWidth = "0px";
   });
-  await waitForMotion(300);
+  await waitForMotion(850);
 
   try {
     await invoke("complete_task", { id: task.id });
