@@ -65,15 +65,6 @@ function completedTasks(): Task[] {
   return tasks.filter((task) => task.status === "completed");
 }
 
-function remainingLabel(count: number): string {
-  const lastTwo = count % 100;
-  if (lastTwo >= 11 && lastTwo <= 14) return "дел осталось";
-  const lastDigit = count % 10;
-  if (lastDigit === 1) return "дело осталось";
-  if (lastDigit >= 2 && lastDigit <= 4) return "дела осталось";
-  return "дел осталось";
-}
-
 function renderTask(task: Task, index: number, completed = false): string {
   const isEditing = editingTaskId === task.id;
   const title = isEditing
@@ -121,36 +112,33 @@ function render(): void {
 
   root.innerHTML = `
     <div class="app-shell">
-      <header class="topbar">
-        <a class="brand" href="#today" aria-label="taskMaster — Сегодня">
-          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span>task<span class="brand-accent">Master</span></span>
-        </a>
-        <div class="topbar-right">
-          <span class="offline-indicator"><i aria-hidden="true"></i> Локально</span>
-          <span class="avatar" aria-hidden="true">Я</span>
-        </div>
-      </header>
+      <aside class="sidebar" aria-label="taskMaster">
+        <a class="brand" href="#today" aria-label="taskMaster — Сегодня">task<span>Master</span></a>
+        <nav class="navigation" aria-label="Разделы">
+          <a class="nav-item is-current" href="#today" aria-current="page"><span class="nav-index">01</span>Сегодня<span class="nav-count">${activeTasks().length}</span></a>
+        </nav>
+        <div class="sidebar-note"><span class="local-mark" aria-hidden="true"></span><span>ЛИЧНОЕ ПРОСТРАНСТВО<br>Работает офлайн</span></div>
+      </aside>
 
-      <main class="main-content">
+      <main class="main-content" id="today">
         <section class="day-heading" aria-labelledby="page-title">
           <div>
-            <p class="eyebrow">МОЙ ПЛАН</p>
-            <h1 id="page-title">Сегодня<span class="heading-period">.</span></h1>
-            <p class="date-line">${escapeHtml(dateLabel)}</p>
+            <p class="eyebrow">${escapeHtml(dateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date())}</p>
+            <h1 id="page-title">План на день<span class="heading-period">.</span></h1>
+            <p class="date-line">Порядок задаёте вы.</p>
           </div>
           <div class="day-progress" aria-label="Осталось ${active.length} задач">
             <span class="progress-count">${String(active.length).padStart(2, "0")}</span>
-            <span class="progress-label">${remainingLabel(active.length)}</span>
+            <span class="progress-label">ОСТАЛОСЬ</span>
           </div>
         </section>
 
         <form class="quick-add" id="quick-add-form">
           <span class="add-symbol" aria-hidden="true">＋</span>
           <input id="new-task-title" name="title" type="text" autocomplete="off"
-            placeholder="Добавить задачу…" aria-label="Название новой задачи" ${saving ? "disabled" : ""} />
-          <kbd>Enter <span aria-hidden="true">↵</span></kbd>
-          <button class="add-button" type="submit" aria-label="Добавить задачу" ${saving ? "disabled" : ""}>Добавить</button>
+            placeholder="Новая задача" aria-label="Название новой задачи" ${saving ? "disabled" : ""} />
+          <kbd>ENTER <span aria-hidden="true">↵</span></kbd>
+          <button class="add-button" type="submit" aria-label="Добавить задачу" ${saving ? "disabled" : ""}>＋</button>
         </form>
 
         <p class="error-banner" role="alert" ${errorMessage ? "" : "hidden"}>
@@ -163,7 +151,7 @@ function render(): void {
               <h2 id="queue-title">Очередь</h2>
               <span class="section-count">${active.length}</span>
             </div>
-            ${active.length > 0 ? "<span class=\"reorder-hint\">Перетаскивайте · Alt + ↑/↓ меняет порядок</span>" : ""}
+            ${active.length > 0 ? "<span class=\"reorder-hint\">↕ РУЧНОЙ ПОРЯДОК</span>" : ""}
           </div>
           ${taskList}
         </section>
@@ -177,11 +165,8 @@ function render(): void {
               <ol class="task-list completed-list" aria-label="Выполненные задачи">${completed.map((task, index) => renderTask(task, index, true)).join("")}</ol>
             </details>`
           : ""}
+        <footer class="app-footer"><span>ALT + ↑ / ↓ — переместить задачу</span><span class="footer-brand">TASKMASTER / 0.1</span></footer>
       </main>
-      <footer class="app-footer">
-        <span>Ваши задачи хранятся только на этом устройстве</span>
-        <span class="footer-brand">taskMaster <i aria-hidden="true">·</i> 0.1</span>
-      </footer>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
     </div>`;
 
