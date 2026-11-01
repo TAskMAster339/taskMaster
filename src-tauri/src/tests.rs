@@ -1,7 +1,22 @@
-use super::tasks::{TaskStatus, TaskStore};
+use super::{
+    clamp_to_monitor,
+    tasks::{TaskStatus, TaskStore},
+};
 use rusqlite::Connection;
 use std::path::PathBuf;
 use uuid::Uuid;
+
+#[test]
+fn overlay_position_is_clamped_inside_the_monitor_work_area() {
+    assert_eq!(
+        clamp_to_monitor(900, 700, 100, 50, 800, 600, 360, 154),
+        (540, 496)
+    );
+    assert_eq!(
+        clamp_to_monitor(-500, -200, 100, 50, 800, 600, 360, 154),
+        (100, 50)
+    );
+}
 
 struct TemporaryDatabase(PathBuf);
 

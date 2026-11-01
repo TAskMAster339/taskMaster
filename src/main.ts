@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type TaskStatus = "active" | "completed" | "archived";
 type Theme = "system" | "dark" | "light";
@@ -39,6 +40,8 @@ interface BackendError {
   message?: string;
 }
 
+interface OverlayShortcutStatus { shortcut: string; available: boolean; }
+
 const root: HTMLDivElement = document.querySelector<HTMLDivElement>("#app") ?? (() => {
   throw new Error("Application root was not found");
 })();
@@ -73,6 +76,10 @@ let timerAnimationFrame: number | null = null;
 let timerDialogOpen = false;
 let timerError = "";
 let fullscreenTimerId: string | null = null;
+let overlayShortcut = "Ctrl+Alt+Space";
+let overlayShortcutAvailable = true;
+let overlayShortcutDialogOpen = false;
+let overlayShortcutError = "";
 
 function reminderInputValue(timestamp: number | null): string {
   if (timestamp === null) return defaultReminderTimeValue();
@@ -552,8 +559,12 @@ function render(allowDuringAnimation = false): void {
             <p class="eyebrow">${escapeHtml(headingDateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(headingDate)}</p>
             <h1 id="page-title">${showingToday ? 'План на день<span class="heading-period">.</span>' : showingHistory ? 'История<span class="heading-period">.</span>' : 'Выполнено<span class="heading-period">.</span>'}</h1>
           </div>
-          <div class="day-progress" aria-label="${showingHistory ? "Задач за дату" : showingToday ? "Активных" : "Выполненных сегодня"} задач: ${showingHistory ? historyCount : visibleTasks.length}">
-            <span class="progress-count">${String(showingHistory ? historyCount : visibleTasks.length).padStart(2, "0")}</span>
+          <div class="day-actions">
+            <div class="day-progress" aria-label="${showingHistory ? "Задач за дату" : showingToday ? "Активных" : "Выполненных сегодня"} задач: ${showingHistory ? historyCount : visibleTasks.length}">
+              <span class="progress-count">${String(showingHistory ? historyCount : visibleTasks.length).padStart(2, "0")}</span>
+            </div>
+            <button class="overlay-toggle" type="button" data-toggle-overlay>Оверлей</button>
+            ${overlayShortcutAvailable ? "" : `<button class="overlay-shortcut-warning" type="button" data-open-overlay-shortcut>Настроить клавишу</button>`}
           </div>
         </section>
 
@@ -582,6 +593,7 @@ function render(allowDuringAnimation = false): void {
           if (!task) return "";
           return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Время сегодня</label><input id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
         })() : ""}
+        ${overlayShortcutDialogOpen ? `<dialog class="reminder-dialog" data-overlay-shortcut-dialog><form data-overlay-shortcut-form><h2>Горячая клавиша</h2><label for="overlay-shortcut-input">Сочетание клавиш</label><input id="overlay-shortcut-input" name="shortcut" type="text" value="${escapeHtml(overlayShortcut)}" placeholder="Ctrl+Shift+O" required aria-describedby="overlay-shortcut-help"/><small id="overlay-shortcut-help">Например: Ctrl+Shift+O</small><p class="reminder-dialog-error" role="alert">${escapeHtml(overlayShortcutError)}</p><div class="reminder-actions"><button type="button" data-close-overlay-shortcut>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>` : ""}
 
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
@@ -592,6 +604,8 @@ function render(allowDuringAnimation = false): void {
   animateEnteringTasks();
   const reminderDialog = root.querySelector<HTMLDialogElement>("[data-reminder-dialog]");
   if (reminderDialog && !reminderDialog.open) reminderDialog.showModal();
+  const shortcutDialog = root.querySelector<HTMLDialogElement>("[data-overlay-shortcut-dialog]");
+  if (shortcutDialog && !shortcutDialog.open) shortcutDialog.showModal();
   if (editingTaskId) {
     const input = root.querySelector<HTMLInputElement>(".rename-input");
     input?.focus();
@@ -801,6 +815,28 @@ function bindEvents(): void {
     updateThemeButton();
   });
 
+  root.querySelector<HTMLButtonElement>("[data-toggle-overlay]")?.addEventListener("click", async () => {
+    try { await invoke("toggle_task_overlay"); }
+    catch (error) { errorMessage = backendMessage(error); render(true); }
+  });
+  root.querySelector<HTMLButtonElement>("[data-open-overlay-shortcut]")?.addEventListener("click", () => { overlayShortcutError = ""; overlayShortcutDialogOpen = true; render(true); });
+  root.querySelector<HTMLButtonElement>("[data-close-overlay-shortcut]")?.addEventListener("click", () => { overlayShortcutDialogOpen = false; overlayShortcutError = ""; render(true); });
+  root.querySelector<HTMLFormElement>("[data-overlay-shortcut-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const shortcut = String(new FormData(event.currentTarget as HTMLFormElement).get("shortcut") ?? "").trim();
+    try {
+      const status = await invoke<OverlayShortcutStatus>("set_overlay_shortcut", { shortcut });
+      overlayShortcut = status.shortcut;
+      overlayShortcutAvailable = status.available;
+      overlayShortcutError = "";
+      overlayShortcutDialogOpen = false;
+      render(true);
+    } catch (error) {
+      overlayShortcutError = backendMessage(error);
+      render(true);
+    }
+  });
+
   root.querySelector<HTMLButtonElement>("[data-retry-load]")?.addEventListener("click", () => {
     loading = true;
     errorMessage = "";
@@ -983,6 +1019,54 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
   render();
 }
 
+async function renderOverlay(): Promise<void> {
+  const overlayRoot = root;
+  let overlayError = "";
+  let lastRenderKey = "";
+  const load = async (): Promise<void> => {
+    try {
+      const active = (await invoke<Task[]>("list_tasks")).filter((task) => task.status === "active").sort((a, b) => a.position - b.position);
+      const pinned = await invoke<boolean>("get_overlay_pinned");
+      const task = active[0];
+      const renderKey = JSON.stringify([task?.id, task?.title, task?.position, pinned, overlayError]);
+      if (renderKey === lastRenderKey) return;
+      lastRenderKey = renderKey;
+      overlayRoot.innerHTML = `<section class="overlay-card" aria-label="Следующая задача">
+        <header class="overlay-header" data-tauri-drag-region><span>СЛЕДУЮЩАЯ ЗАДАЧА</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? "Открепить окно" : "Закрепить поверх окон"}" title="${pinned ? "Открепить" : "Закрепить поверх окон"}">${pinned ? "◆" : "◇"}</button></header>
+        ${task ? `<div class="overlay-task"><span class="overlay-number">${String(task.position + 1).padStart(2, "0")}</span><strong>${escapeHtml(task.title)}</strong></div>
+          <footer class="overlay-actions"><button type="button" data-overlay-complete="${task.id}">Выполнено</button><button type="button" data-overlay-open>Открыть список</button></footer>`
+          : `<div class="overlay-empty"><strong>На сегодня всё</strong><button type="button" data-overlay-open>Добавить задачу</button></div>`}
+        ${overlayError ? `<p class="overlay-error" role="alert">${escapeHtml(overlayError)} <button type="button" data-overlay-retry>Повторить</button></p>` : ""}
+      </section>`;
+      overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-pin]")?.addEventListener("click", async () => {
+        try { await invoke("set_overlay_pinned", { pinned: !pinned }); overlayError = ""; await load(); }
+        catch (error) { overlayError = backendMessage(error); await load(); }
+      });
+      overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-complete]")?.addEventListener("click", async (event) => {
+        const id = (event.currentTarget as HTMLButtonElement).dataset.overlayComplete;
+        if (!id) return;
+        try { await invoke("complete_overlay_task", { id }); overlayError = ""; await load(); }
+        catch (error) { overlayError = backendMessage(error); await load(); }
+      });
+      overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-open]")?.addEventListener("click", () => { void invoke("open_task_list"); });
+      overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-retry]")?.addEventListener("click", () => { overlayError = ""; void load(); });
+    } catch (error) {
+      overlayError = backendMessage(error);
+      overlayRoot.innerHTML = `<section class="overlay-card overlay-failed"><strong>Очередь недоступна</strong><p role="alert">${escapeHtml(overlayError)}</p><button type="button" data-overlay-retry>Повторить</button></section>`;
+      overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-retry]")?.addEventListener("click", () => { overlayError = ""; void load(); });
+    }
+  };
+  await load();
+  void listen("tasks-changed", () => { void load(); });
+  void listen("overlay-settings-error", () => { overlayError = "Не удалось сохранить положение оверлея."; void load(); });
+  window.setInterval(() => { void load(); }, 2_000);
+}
+
+if (getCurrentWindow().label === "overlay") {
+  applyTheme();
+  document.body.classList.add("overlay-mode");
+  void renderOverlay();
+} else {
 applyTheme();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (theme === "system") applyTheme();
@@ -1064,3 +1148,25 @@ window.setInterval(async () => {
   }
 }, 60_000);
 window.setInterval(() => { if (activeView === "timers") void refreshTimers(false); }, 1_000);
+void listen("tasks-changed", () => { void refreshTasks(); });
+void listen("overlay-open-today", () => {
+  activeView = "today";
+  window.history.pushState(null, "", "#today");
+  render(true);
+  root.querySelector<HTMLInputElement>("#new-task-title")?.focus();
+});
+void listen<string>("overlay-shortcut-error", ({ payload }) => {
+  overlayShortcutAvailable = false;
+  errorMessage = `${payload} Проверьте, не занято ли сочетание другой программой.`;
+  render(true);
+});
+void invoke<OverlayShortcutStatus>("get_overlay_shortcut_status").then((status) => {
+  overlayShortcut = status.shortcut;
+  overlayShortcutAvailable = status.available;
+  if (!status.available) errorMessage = `Не удалось зарегистрировать ${status.shortcut}. Можно выбрать другое сочетание клавиш.`;
+  render(true);
+}).catch((error) => {
+  errorMessage = backendMessage(error);
+  render(true);
+});
+}
