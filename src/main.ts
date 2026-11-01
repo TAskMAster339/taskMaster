@@ -68,6 +68,8 @@ let reminderEditingTaskId: string | null = null;
 let reminderDialogError = "";
 let highlightedReminderTaskId: string | null = null;
 let timers: Timer[] = [];
+const timerSnapshots = new Map<string, { remainingSeconds: number; sampledAt: number; status: Timer["status"] }>();
+let timerAnimationFrame: number | null = null;
 let timerDialogOpen = false;
 let timerError = "";
 let fullscreenTimerId: string | null = null;
@@ -116,6 +118,57 @@ function timerSecondsFromForm(form: HTMLFormElement): number {
   const values = new FormData(form);
   const hours = Number(values.get("hours")); const minutes = Number(values.get("minutes")); const seconds = Number(values.get("seconds"));
   return hours * 3600 + minutes * 60 + seconds;
+}
+
+function synchronizeTimerSnapshots(nextTimers: Timer[]): void {
+  const now = performance.now();
+  const activeIds = new Set(nextTimers.map((timer) => timer.id));
+  for (const id of timerSnapshots.keys()) if (!activeIds.has(id)) timerSnapshots.delete(id);
+
+  for (const timer of nextTimers) {
+    const previous = timerSnapshots.get(timer.id);
+    if (!previous || previous.status !== timer.status || timer.status !== "running") {
+      timerSnapshots.set(timer.id, { remainingSeconds: timer.remainingSeconds, sampledAt: now, status: timer.status });
+      continue;
+    }
+
+    const estimated = Math.max(0, previous.remainingSeconds - (now - previous.sampledAt) / 1_000);
+    if (Math.abs(estimated - timer.remainingSeconds) > 1.5) {
+      timerSnapshots.set(timer.id, { remainingSeconds: timer.remainingSeconds, sampledAt: now, status: timer.status });
+    }
+  }
+}
+
+function updateTimerVisuals(now: number): void {
+  if (activeView !== "timers") return;
+  const circumference = 2 * Math.PI * 86;
+
+  for (const timer of timers) {
+    const snapshot = timerSnapshots.get(timer.id);
+    if (!snapshot) continue;
+    const remaining = snapshot.status === "running"
+      ? Math.max(0, snapshot.remainingSeconds - (now - snapshot.sampledAt) / 1_000)
+      : snapshot.remainingSeconds;
+    const card = root.querySelector<HTMLElement>(`[data-timer-card="${CSS.escape(timer.id)}"]`);
+    const clock = card?.querySelector<HTMLElement>("[data-timer-clock]");
+    if (clock) clock.textContent = formatTimerTime(Math.ceil(remaining));
+    const progress = card?.querySelector<SVGCircleElement>(".timer-ring-progress");
+    if (progress) {
+      const ratio = timer.durationSeconds > 0 ? Math.min(1, remaining / timer.durationSeconds) : 0;
+      progress.style.strokeDashoffset = String(circumference * (1 - ratio));
+    }
+  }
+}
+
+function animateTimerFrames(): void {
+  if (timerAnimationFrame !== null || !timers.some((timer) => timer.status === "running")) return;
+  const tick = (now: number): void => {
+    timerAnimationFrame = null;
+    if (activeView !== "timers" || !timers.some((timer) => timer.status === "running")) return;
+    updateTimerVisuals(now);
+    timerAnimationFrame = requestAnimationFrame(tick);
+  };
+  timerAnimationFrame = requestAnimationFrame(tick);
 }
 
 function captureTaskPositions(): Map<string, string> {
@@ -440,6 +493,7 @@ function renderTimers(): void {
       ${timerDialogOpen ? `<dialog class="reminder-dialog timer-dialog" data-timer-dialog><form data-timer-form><h2>Добавить таймер</h2><label for="timer-hours">Длительность</label><div class="timer-duration-fields"><input id="timer-hours" type="number" name="hours" min="0" max="99" value="00" aria-label="Часы" required/><span>:</span><input type="number" name="minutes" min="0" max="59" value="00" aria-label="Минуты" required/><span>:</span><input type="number" name="seconds" min="0" max="59" value="00" aria-label="Секунды" required/></div><label for="timer-name">Название</label><input id="timer-name" name="name" type="text" maxlength="80" value="Таймер (${timers.length + 1})" required/><p class="reminder-dialog-error" role="alert">${escapeHtml(timerError)}</p><div class="reminder-actions"><button type="button" data-close-timer>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>` : ""}`}
     </main><span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span></div>`;
   bindEvents();
+  animateTimerFrames();
   const dialog = root.querySelector<HTMLDialogElement>("[data-timer-dialog]");
   if (dialog && !dialog.open) dialog.showModal();
 }
@@ -447,6 +501,10 @@ function renderTimers(): void {
 function render(allowDuringAnimation = false): void {
   if (taskAnimationLocks.size > 0 && !allowDuringAnimation) return;
   if (activeView === "timers") { renderTimers(); return; }
+  if (timerAnimationFrame !== null) {
+    cancelAnimationFrame(timerAnimationFrame);
+    timerAnimationFrame = null;
+  }
   const previousPositions = captureTaskPositions();
   const active = activeTasks();
   const completedToday = completedTodayTasks();
@@ -558,23 +616,13 @@ async function refreshTasks(): Promise<void> {
 async function refreshTimers(shouldRender = true): Promise<void> {
   try {
     const previous = timers;
-    timers = await invoke<Timer[]>("list_timers");
+    const nextTimers = await invoke<Timer[]>("list_timers");
+    synchronizeTimerSnapshots(nextTimers);
+    timers = nextTimers;
     timerError = "";
     const changed = previous.length !== timers.length || timers.some((timer, index) => previous[index]?.id !== timer.id || previous[index]?.status !== timer.status);
     if (shouldRender && activeView === "timers") render(true);
     else if (changed && activeView === "timers") render(true);
-    else if (activeView === "timers") {
-      for (const timer of timers) {
-        const card = root.querySelector<HTMLElement>(`[data-timer-card="${CSS.escape(timer.id)}"]`);
-        const clock = card?.querySelector<HTMLElement>("[data-timer-clock]");
-        if (clock) clock.textContent = formatTimerTime(timer.remainingSeconds);
-        const progress = card?.querySelector<SVGCircleElement>(".timer-ring-progress");
-        if (progress) {
-          const circumference = 2 * Math.PI * 86;
-          progress.style.strokeDashoffset = String(circumference * (1 - timer.remainingSeconds / timer.durationSeconds));
-        }
-      }
-    }
   } catch (error) {
     timerError = backendMessage(error);
     if (shouldRender && activeView === "timers") render(true);
@@ -662,9 +710,9 @@ function bindEvents(): void {
   }));
   root.querySelectorAll<HTMLButtonElement>("[data-timer-fullscreen]").forEach((button) => button.addEventListener("click", () => {
     fullscreenTimerId = button.dataset.timerFullscreen ?? null;
-    void document.documentElement.requestFullscreen().then(() => render(true)).catch(() => { timerError = "Не удалось открыть полноэкранный режим."; fullscreenTimerId = null; render(true); });
+    render(true);
   }));
-  root.querySelector<HTMLButtonElement>("[data-exit-fullscreen]")?.addEventListener("click", () => { fullscreenTimerId = null; if (document.fullscreenElement) void document.exitFullscreen(); render(true); });
+  root.querySelector<HTMLButtonElement>("[data-exit-fullscreen]")?.addEventListener("click", () => { fullscreenTimerId = null; render(true); });
   root.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", () => {
     reminderEditingTaskId = button.dataset.editReminder ?? null;
     reminderDialogError = "";
@@ -985,8 +1033,11 @@ render();
 void refreshTasks();
 if (activeView === "history") void refreshHistory();
 if (activeView === "timers") void refreshTimers();
-document.addEventListener("fullscreenchange", () => {
-  if (!document.fullscreenElement && fullscreenTimerId) { fullscreenTimerId = null; if (activeView === "timers") render(true); }
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && fullscreenTimerId) {
+    fullscreenTimerId = null;
+    render(true);
+  }
 });
 void listen<Timer>("timer-finished", async ({ payload }) => {
   announcement = `Таймер завершён: ${payload.name}.`;
