@@ -203,6 +203,92 @@ fn archives_tasks_at_the_48_hour_creation_deadline_and_only_once() {
 }
 
 #[test]
+fn reminders_are_validated_stored_and_cleared_with_history() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Позвонить").unwrap();
+
+    store.set_reminder_at(&task.id, 5_000, 1_000).unwrap();
+    assert!(store.set_reminder_at(&task.id, 999, 1_000).is_err());
+
+    let scheduled = store
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == task.id)
+        .unwrap();
+    assert_eq!(scheduled.reminder_at, Some(5_000));
+    assert_eq!(
+        scheduled.reminder_state,
+        Some(super::tasks::ReminderState::Pending)
+    );
+
+    store.clear_reminder(&task.id).unwrap();
+    let cleared = store
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == task.id)
+        .unwrap();
+    assert_eq!(cleared.reminder_at, None);
+    assert_eq!(cleared.reminder_state, None);
+    assert_eq!(
+        store
+            .count_events_for_task(&task.id, "reminder_set")
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .count_events_for_task(&task.id, "reminder_cleared")
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn due_reminders_fire_once_and_overdue_reminders_are_marked_missed() {
+    let store = TaskStore::in_memory().unwrap();
+    let due = store.create_task("Выполнить дело").unwrap();
+    let missed = store.create_task("Пропущенное дело").unwrap();
+    store.set_reminder_at(&due.id, 2_000, 1_000).unwrap();
+    store.set_reminder_at(&missed.id, 3_000, 1_000).unwrap();
+
+    assert!(store.take_due_reminders(1_999).unwrap().is_empty());
+    let notifications = store.take_due_reminders(2_000).unwrap();
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].task_id, due.id);
+    assert_eq!(notifications[0].title, "Выполнить дело");
+    assert!(store.take_due_reminders(2_001).unwrap().is_empty());
+
+    assert_eq!(store.mark_missed_reminders(3_000).unwrap(), 1);
+    assert_eq!(store.mark_missed_reminders(3_001).unwrap(), 0);
+    assert!(store.take_due_reminders(10_000).unwrap().is_empty());
+    let tasks = store.list_tasks().unwrap();
+    let fired = tasks.iter().find(|item| item.id == due.id).unwrap();
+    let skipped = tasks.iter().find(|item| item.id == missed.id).unwrap();
+    assert_eq!(
+        fired.reminder_state,
+        Some(super::tasks::ReminderState::Fired)
+    );
+    assert_eq!(
+        skipped.reminder_state,
+        Some(super::tasks::ReminderState::Missed)
+    );
+    assert_eq!(
+        store
+            .count_events_for_task(&due.id, "reminder_fired")
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .count_events_for_task(&missed.id, "reminder_missed")
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
     let database = TemporaryDatabase::new();
     let connection = Connection::open(&database.0).unwrap();
@@ -249,7 +335,7 @@ fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     assert_eq!(violations, 0);
 }
 

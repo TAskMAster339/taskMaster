@@ -6,9 +6,9 @@ use std::{
 };
 
 use serde::Serialize;
-use tasks::{HistoryDay, Task, TaskStore};
+use tasks::{DueReminder, HistoryDay, Task, TaskStore};
 use tauri::{
-    AppHandle, Manager, State, WindowEvent,
+    AppHandle, Emitter, Manager, State, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
@@ -21,6 +21,12 @@ struct AppError {
 }
 
 impl AppError {
+    fn invalid_reminder_time() -> Self {
+        Self {
+            code: "invalid_reminder_time",
+            message: "Укажите время в будущем.".into(),
+        }
+    }
     fn invalid_title() -> Self {
         Self {
             code: "invalid_title",
@@ -134,6 +140,20 @@ fn restore_task(id: String, state: State<'_, AppState>) -> Result<(), AppError> 
     with_store(&state, |store| store.restore_task(&id))
 }
 
+#[tauri::command]
+fn set_task_reminder(
+    id: String,
+    reminder_at: i64,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    with_store(&state, |store| store.set_reminder(&id, reminder_at))
+}
+
+#[tauri::command]
+fn clear_task_reminder(id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    with_store(&state, |store| store.clear_reminder(&id))
+}
+
 fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
     std::fs::create_dir_all(&path).map_err(|_| AppError::storage())?;
     let store =
@@ -143,7 +163,79 @@ fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
         .unwrap_or_default()
         .as_millis() as i64;
     store.archive_expired_tasks(now)?;
+    store.mark_missed_reminders(now)?;
     Ok(store)
+}
+
+fn notify_reminder(app: &AppHandle, reminder: DueReminder) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app
+        .notification()
+        .builder()
+        .title("taskMaster")
+        .body(&reminder.title)
+        .extra("taskId", serde_json::Value::String(reminder.task_id))
+        .show()
+        .map_err(|_| app.emit("reminder-delivery-error", ()))
+        .ok();
+}
+
+fn register_notification_actions(app: &AppHandle) {
+    use tauri_plugin_notification::NotificationExt;
+    let handle = app.clone();
+    let _ = app.notification().on_action(move |action| {
+        if action.action_id() == "tap" {
+            if let Some(id) = action
+                .notification()
+                .and_then(|n| n.extra().get("taskId"))
+                .and_then(|v| v.as_str())
+            {
+                show_main_window(&handle);
+                let _ = handle.emit("reminder-open-task", id.to_owned());
+            }
+        }
+    });
+}
+
+fn start_reminder_scheduler(app: AppHandle) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let Some(state) = app.try_state::<AppState>() else {
+                continue;
+            };
+            let Ok(guard) = state.store.lock() else {
+                continue;
+            };
+            let Ok(store) = guard.as_ref() else {
+                continue;
+            };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            // Give the 5-second polling window room, but treat longer gaps (including sleep)
+            // as missed instead of displaying stale notifications after wake.
+            if store
+                .mark_missed_reminders(now.saturating_sub(30_000))
+                .is_err()
+            {
+                let _ = app.emit("reminder-runtime-error", ());
+                continue;
+            }
+            match store.take_due_reminders(now) {
+                Ok(reminders) => {
+                    drop(guard);
+                    for reminder in reminders {
+                        notify_reminder(&app, reminder);
+                    }
+                }
+                Err(_) => {
+                    let _ = app.emit("reminder-runtime-error", ());
+                }
+            }
+        }
+    });
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -167,6 +259,7 @@ fn toggle_main_window(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }))
@@ -179,6 +272,8 @@ pub fn run() {
             app.manage(AppState {
                 store: Mutex::new(store),
             });
+            start_reminder_scheduler(app.handle().clone());
+            register_notification_actions(app.handle());
 
             let show = MenuItemBuilder::with_id("show", "Показать").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Выход").build(app)?;
@@ -232,7 +327,9 @@ pub fn run() {
             archive_expired_tasks,
             list_history_for_range,
             list_task_creation_times,
-            restore_task
+            restore_task,
+            set_task_reminder,
+            clear_task_reminder
         ])
         .run(tauri::generate_context!())
         .expect("failed to run taskMaster");

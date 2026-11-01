@@ -14,6 +14,31 @@ pub enum TaskStatus {
     Archived,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReminderState {
+    Pending,
+    Fired,
+    Missed,
+}
+
+impl ReminderState {
+    fn parse(value: &str) -> rusqlite::Result<Self> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "fired" => Ok(Self::Fired),
+            "missed" => Ok(Self::Missed),
+            _ => Err(rusqlite::Error::InvalidQuery),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DueReminder {
+    pub task_id: String,
+    pub title: String,
+}
+
 impl TaskStatus {
     fn parse(value: &str) -> rusqlite::Result<Self> {
         match value {
@@ -36,6 +61,8 @@ pub struct Task {
     pub updated_at: i64,
     pub completed_at: Option<i64>,
     pub archived_at: Option<i64>,
+    pub reminder_at: Option<i64>,
+    pub reminder_state: Option<ReminderState>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,7 +98,7 @@ impl TaskStore {
     fn from_connection(connection: Connection) -> rusqlite::Result<Self> {
         let schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !(0..=2).contains(&schema_version) {
+        if !(0..=3).contains(&schema_version) {
             return Err(rusqlite::Error::InvalidQuery);
         }
 
@@ -127,6 +154,19 @@ impl TaskStore {
                  PRAGMA foreign_keys = ON;",
             )?;
         }
+        let migrated_version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if migrated_version == 2 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN reminder_at INTEGER;
+                 ALTER TABLE tasks ADD COLUMN reminder_state TEXT
+                     CHECK(reminder_state IS NULL OR reminder_state IN ('pending', 'fired', 'missed'));
+                 CREATE INDEX tasks_reminder_due ON tasks(reminder_state, reminder_at);
+                 PRAGMA user_version = 3;",
+            )?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -134,7 +174,8 @@ impl TaskStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, title, status, position, created_at, updated_at, completed_at, archived_at
+                "SELECT id, title, status, position, created_at, updated_at, completed_at, archived_at,
+                        reminder_at, reminder_state
                  FROM tasks
                  ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,
                           CASE WHEN status = 'active' THEN position END ASC,
@@ -144,6 +185,7 @@ impl TaskStore {
         let rows = statement
             .query_map([], |row| {
                 let status: String = row.get(2)?;
+                let reminder_state: Option<String> = row.get(9)?;
                 Ok(Task {
                     id: row.get(0)?,
                     title: row.get(1)?,
@@ -153,6 +195,11 @@ impl TaskStore {
                     updated_at: row.get(5)?,
                     completed_at: row.get(6)?,
                     archived_at: row.get(7)?,
+                    reminder_at: row.get(8)?,
+                    reminder_state: reminder_state
+                        .as_deref()
+                        .map(ReminderState::parse)
+                        .transpose()?,
                 })
             })
             .map_err(|_| AppError::storage())?;
@@ -183,6 +230,8 @@ impl TaskStore {
             updated_at: now,
             completed_at: None,
             archived_at: None,
+            reminder_at: None,
+            reminder_state: None,
         };
         transaction
             .execute(
@@ -232,6 +281,177 @@ impl TaskStore {
             )?;
         }
         transaction.commit().map_err(|_| AppError::storage())
+    }
+
+    pub fn set_reminder(&self, id: &str, reminder_at: i64) -> Result<(), AppError> {
+        self.set_reminder_at(id, reminder_at, now_millis())
+    }
+
+    pub fn set_reminder_at(&self, id: &str, reminder_at: i64, now: i64) -> Result<(), AppError> {
+        if reminder_at <= now {
+            return Err(AppError::invalid_reminder_time());
+        }
+
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let task: Option<(String, Option<i64>, Option<String>)> = transaction
+            .query_row(
+                "SELECT status, reminder_at, reminder_state FROM tasks WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|_| AppError::storage())?;
+        let Some((status, old_reminder_at, old_reminder_state)) = task else {
+            return Err(not_found());
+        };
+        if status == "archived" {
+            return Err(AppError::invalid_state());
+        }
+        if old_reminder_at == Some(reminder_at) && old_reminder_state.as_deref() == Some("pending")
+        {
+            return transaction.commit().map_err(|_| AppError::storage());
+        }
+
+        transaction
+            .execute(
+                "UPDATE tasks SET reminder_at = ?1, reminder_state = 'pending', updated_at = ?2
+                 WHERE id = ?3",
+                params![reminder_at, now, id],
+            )
+            .map_err(|_| AppError::storage())?;
+        record_event(
+            &transaction,
+            id,
+            "reminder_set",
+            now,
+            &serde_json::json!({ "reminderAt": reminder_at }),
+        )?;
+        transaction.commit().map_err(|_| AppError::storage())
+    }
+
+    pub fn clear_reminder(&self, id: &str) -> Result<(), AppError> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let reminder_at: Option<Option<i64>> = transaction
+            .query_row("SELECT reminder_at FROM tasks WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|_| AppError::storage())?;
+        let Some(reminder_at) = reminder_at else {
+            return Err(not_found());
+        };
+        let Some(reminder_at) = reminder_at else {
+            return transaction.commit().map_err(|_| AppError::storage());
+        };
+
+        let now = now_millis();
+        transaction
+            .execute(
+                "UPDATE tasks SET reminder_at = NULL, reminder_state = NULL, updated_at = ?1
+                 WHERE id = ?2",
+                params![now, id],
+            )
+            .map_err(|_| AppError::storage())?;
+        record_event(
+            &transaction,
+            id,
+            "reminder_cleared",
+            now,
+            &serde_json::json!({ "reminderAt": reminder_at }),
+        )?;
+        transaction.commit().map_err(|_| AppError::storage())
+    }
+
+    pub fn take_due_reminders(&self, now: i64) -> Result<Vec<DueReminder>, AppError> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, title, reminder_at FROM tasks
+                 WHERE reminder_state = 'pending' AND reminder_at <= ?1
+                 ORDER BY reminder_at, id",
+            )
+            .map_err(|_| AppError::storage())?;
+        let due = statement
+            .query_map([now], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|_| AppError::storage())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| AppError::storage())?;
+        drop(statement);
+
+        let mut reminders = Vec::with_capacity(due.len());
+        for (id, title, reminder_at) in due {
+            transaction
+                .execute(
+                    "UPDATE tasks SET reminder_state = 'fired' WHERE id = ?1 AND reminder_state = 'pending'",
+                    [&id],
+                )
+                .map_err(|_| AppError::storage())?;
+            record_event(
+                &transaction,
+                &id,
+                "reminder_fired",
+                now,
+                &serde_json::json!({ "reminderAt": reminder_at }),
+            )?;
+            reminders.push(DueReminder { task_id: id, title });
+        }
+        transaction.commit().map_err(|_| AppError::storage())?;
+        Ok(reminders)
+    }
+
+    pub fn mark_missed_reminders(&self, now: i64) -> Result<usize, AppError> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, reminder_at FROM tasks
+                 WHERE reminder_state = 'pending' AND reminder_at <= ?1
+                 ORDER BY reminder_at, id",
+            )
+            .map_err(|_| AppError::storage())?;
+        let overdue = statement
+            .query_map([now], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|_| AppError::storage())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| AppError::storage())?;
+        drop(statement);
+
+        for (id, reminder_at) in &overdue {
+            transaction
+                .execute(
+                    "UPDATE tasks SET reminder_state = 'missed' WHERE id = ?1 AND reminder_state = 'pending'",
+                    [id],
+                )
+                .map_err(|_| AppError::storage())?;
+            record_event(
+                &transaction,
+                id,
+                "reminder_missed",
+                now,
+                &serde_json::json!({ "reminderAt": reminder_at }),
+            )?;
+        }
+        transaction.commit().map_err(|_| AppError::storage())?;
+        Ok(overdue.len())
     }
 
     pub fn complete_task(&self, id: &str) -> Result<(), AppError> {
@@ -373,7 +593,7 @@ impl TaskStore {
             .connection
             .prepare(
                 "SELECT t.id, t.title, t.status, t.position, t.created_at, t.updated_at,
-                        t.completed_at, t.archived_at, MAX(e.occurred_at),
+                        t.completed_at, t.archived_at, t.reminder_at, t.reminder_state, MAX(e.occurred_at),
                         COALESCE((SELECT MIN(created.occurred_at) FROM task_events created
                                   WHERE created.task_id = t.id AND created.kind = 'created'), t.created_at)
                  FROM task_events e JOIN tasks t ON t.id = e.task_id
@@ -384,6 +604,7 @@ impl TaskStore {
         let rows = statement
             .query_map(rusqlite::params![kind, start, end], |row| {
                 let status: String = row.get(2)?;
+                let reminder_state: Option<String> = row.get(9)?;
                 Ok(HistoryTask {
                     task: Task {
                         id: row.get(0)?,
@@ -394,9 +615,14 @@ impl TaskStore {
                         updated_at: row.get(5)?,
                         completed_at: row.get(6)?,
                         archived_at: row.get(7)?,
+                        reminder_at: row.get(8)?,
+                        reminder_state: reminder_state
+                            .as_deref()
+                            .map(ReminderState::parse)
+                            .transpose()?,
                     },
-                    occurred_at: row.get(8)?,
-                    created_at: row.get(9)?,
+                    occurred_at: row.get(10)?,
+                    created_at: row.get(11)?,
                 })
             })
             .map_err(|_| AppError::storage())?;

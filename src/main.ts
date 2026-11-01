@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 type TaskStatus = "active" | "completed" | "archived";
 type Theme = "system" | "dark" | "light";
@@ -16,6 +17,8 @@ interface Task {
   updatedAt: number;
   completedAt: number | null;
   archivedAt: number | null;
+  reminderAt: number | null;
+  reminderState: "pending" | "fired" | "missed" | null;
 }
 
 interface HistoryTask {
@@ -59,6 +62,16 @@ yesterday.setDate(yesterday.getDate() - 1);
 let selectedHistoryDate = toLocalDateString(yesterday);
 let calendarMonth = monthStart(parseLocalDate(selectedHistoryDate));
 const enteringTaskIds = new Set<string>();
+let reminderEditingTaskId: string | null = null;
+let reminderDialogError = "";
+let highlightedReminderTaskId: string | null = null;
+
+function reminderInputValue(timestamp: number | null): string {
+  if (timestamp === null) return "";
+  const date = new Date(timestamp);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
 
 function waitForMotion(milliseconds: number): Promise<void> {
   const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : milliseconds;
@@ -312,7 +325,7 @@ function renderHistoryColumn(title: string, items: HistoryTask[], type: "complet
   const list = historyLoading
     ? `<li class="history-empty">Загружаем…</li>`
     : items.length
-      ? items.map(({ task, occurredAt, createdAt }) => `<li class="history-task-row">
+      ? items.map(({ task, occurredAt, createdAt }) => `<li class="history-task-row ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""}" data-task-id="${task.id}">
           <span class="history-task-title">${escapeHtml(task.title)}</span>
           <time>${formatTime(type === "completed" ? occurredAt : createdAt)}</time>
           ${type === "archived" && task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}" aria-label="Восстановить задачу: ${escapeHtml(task.title)}">↶</button>` : ""}
@@ -343,7 +356,7 @@ function renderTask(task: Task, index: number, completed = false): string {
     : `<span class="task-title">${escapeHtml(task.title)}</span>`;
 
   return `
-    <li class="task-row ${completed ? "is-completed" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
+    <li class="task-row ${completed ? "is-completed" : ""} ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
       <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
@@ -351,6 +364,7 @@ function renderTask(task: Task, index: number, completed = false): string {
         <span aria-hidden="true">${completed ? "✓" : ""}</span>
       </button>
       <div class="task-content">${title}</div>
+      <button class="reminder-button ${task.reminderAt !== null ? "has-reminder" : ""}" type="button" data-edit-reminder="${task.id}" aria-label="${task.reminderAt !== null ? `Изменить напоминание: ${escapeHtml(task.title)}` : `Добавить напоминание: ${escapeHtml(task.title)}`}">${task.reminderAt !== null ? `<time>${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(task.reminderAt)}</time>` : "◷"}</button>
     </li>`;
 }
 
@@ -427,6 +441,11 @@ function render(allowDuringAnimation = false): void {
           ${showingHistory ? `<div class="history-list-container">${historyLoading ? '<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем список…</span></div>' : taskList}</div>` : taskList}
         </section>
         ${showingHistory ? renderCalendar() : ""}
+        ${reminderEditingTaskId ? (() => {
+          const task = tasks.find((item) => item.id === reminderEditingTaskId);
+          if (!task) return "";
+          return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Дата и время</label><input id="reminder-time" name="reminderAt" type="datetime-local" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
+        })() : ""}
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
     </div>`;
@@ -434,6 +453,8 @@ function render(allowDuringAnimation = false): void {
   bindEvents();
   animatePositionChanges(previousPositions);
   animateEnteringTasks();
+  const reminderDialog = root.querySelector<HTMLDialogElement>("[data-reminder-dialog]");
+  if (reminderDialog && !reminderDialog.open) reminderDialog.showModal();
   if (editingTaskId) {
     const input = root.querySelector<HTMLInputElement>(".rename-input");
     input?.focus();
@@ -503,6 +524,44 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", () => {
+    reminderEditingTaskId = button.dataset.editReminder ?? null;
+    reminderDialogError = "";
+    render(true);
+  }));
+  root.querySelector<HTMLButtonElement>("[data-close-reminder]")?.addEventListener("click", () => { reminderEditingTaskId = null; render(true); });
+  root.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) { reminderEditingTaskId = null; render(true); }
+  });
+  root.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("cancel", () => {
+    reminderEditingTaskId = null;
+  });
+  root.querySelector<HTMLFormElement>("[data-reminder-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const id = form.dataset.reminderForm;
+    const value = new FormData(form).get("reminderAt");
+    if (!id || typeof value !== "string") return;
+    const timestamp = new Date(value).getTime();
+    try {
+      await invoke("set_task_reminder", { id, reminderAt: timestamp });
+      reminderEditingTaskId = null;
+      reminderDialogError = "";
+      await refreshTasks();
+    } catch (error) {
+      reminderDialogError = backendMessage(error);
+      render(true);
+    }
+  });
+  root.querySelector<HTMLButtonElement>("[data-clear-reminder]")?.addEventListener("click", async (event) => {
+    const id = (event.currentTarget as HTMLButtonElement).dataset.clearReminder;
+    if (!id) return;
+    try {
+      await invoke("clear_task_reminder", { id });
+      reminderEditingTaskId = null;
+      await refreshTasks();
+    } catch (error) { reminderDialogError = backendMessage(error); render(true); }
+  });
   root.querySelectorAll<HTMLAnchorElement>("[data-view]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
@@ -747,6 +806,38 @@ const syncViewFromHash = (): void => {
 };
 window.addEventListener("popstate", syncViewFromHash);
 window.addEventListener("hashchange", syncViewFromHash);
+void listen<string>("reminder-open-task", async ({ payload }) => {
+  await refreshTasks();
+  const task = tasks.find((item) => item.id === payload);
+  if (!task) return;
+  if (task.status === "active") {
+    activeView = "today";
+  } else if (task.status === "completed" && isSameLocalDay(task.completedAt, new Date())) {
+    activeView = "completed";
+  } else {
+    activeView = "history";
+    const eventTime = task.status === "archived" ? task.archivedAt : task.completedAt;
+    if (eventTime !== null) {
+      selectedHistoryDate = toLocalDateString(new Date(eventTime));
+      calendarMonth = monthStart(parseLocalDate(selectedHistoryDate));
+      await refreshHistory();
+    }
+  }
+  window.history.pushState(null, "", `#${activeView}`);
+  highlightedReminderTaskId = payload;
+  render(true);
+  const row = root.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(payload)}"]`);
+  row?.scrollIntoView({ behavior: "smooth", block: "center" });
+  window.setTimeout(() => { highlightedReminderTaskId = null; render(true); }, 4_000);
+});
+void listen("reminder-delivery-error", () => {
+  errorMessage = "Не удалось показать уведомление. Проверьте Параметры Windows → Система → Уведомления.";
+  render(true);
+});
+void listen("reminder-runtime-error", () => {
+  errorMessage = "Не удалось обработать напоминание. Перезапустите приложение.";
+  render(true);
+});
 render();
 void refreshTasks();
 if (activeView === "history") void refreshHistory();
