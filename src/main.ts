@@ -4,7 +4,6 @@ type TaskStatus = "active" | "completed";
 type Theme = "system" | "dark" | "light";
 
 const themeStorageKey = "taskmaster.theme";
-const completedHeightStorageKey = "taskmaster.completed-height";
 const themeOrder: Theme[] = ["system", "dark", "light"];
 const themeLabels: Record<Theme, string> = { system: "Система", dark: "Тёмная", light: "Светлая" };
 
@@ -36,8 +35,8 @@ let editingTaskId: string | null = null;
 let mouseDragActive = false;
 let announcement = "";
 let theme: Theme = readTheme();
-let completedOpen = false;
-let completedPanelHeight = readCompletedPanelHeight();
+type View = "today" | "completed";
+let activeView: View = window.location.hash === "#completed" ? "completed" : "today";
 
 function readTheme(): Theme {
   try {
@@ -48,29 +47,10 @@ function readTheme(): Theme {
   }
 }
 
-function readCompletedPanelHeight(): number | null {
-  try {
-    const value = Number(localStorage.getItem(completedHeightStorageKey));
-    return Number.isFinite(value) && value >= 60 ? value : null;
-  } catch {
-    return null;
-  }
-}
-
 function applyTheme(): void {
   const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
   document.documentElement.dataset.themeMode = theme;
-}
-
-function setCompletedHeight(height: number | null): void {
-  const main = root.querySelector<HTMLElement>(".main-content");
-  if (!main) return;
-  const resizer = root.querySelector<HTMLElement>("[data-section-resizer]");
-  if (height === null) main.style.removeProperty("--completed-height");
-  else main.style.setProperty("--completed-height", `${height}px`);
-  resizer?.setAttribute("aria-valuemax", String(Math.max(60, main.clientHeight - 260)));
-  resizer?.setAttribute("aria-valuenow", String(height ?? completedPanelHeight ?? 112));
 }
 
 function updateThemeButton(): void {
@@ -115,6 +95,19 @@ function completedTasks(): Task[] {
   return tasks.filter((task) => task.status === "completed");
 }
 
+function isSameLocalDay(timestamp: number | null, date: Date): boolean {
+  if (timestamp === null) return false;
+  const taskDate = new Date(timestamp);
+  return taskDate.getFullYear() === date.getFullYear()
+    && taskDate.getMonth() === date.getMonth()
+    && taskDate.getDate() === date.getDate();
+}
+
+function completedTodayTasks(): Task[] {
+  const today = new Date();
+  return completedTasks().filter((task) => isSameLocalDay(task.completedAt, today));
+}
+
 function renderTask(task: Task, index: number, completed = false): string {
   const isEditing = editingTaskId === task.id;
   const title = isEditing
@@ -137,12 +130,13 @@ function renderTask(task: Task, index: number, completed = false): string {
 
 function render(): void {
   const active = activeTasks();
-  const completed = completedTasks();
-  completedOpen = root.querySelector<HTMLDetailsElement>(".completed-section")?.open ?? completedOpen;
+  const completedToday = completedTodayTasks();
+  const showingToday = activeView === "today";
+  const visibleTasks = showingToday ? active : completedToday;
   const taskList = loading
     ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем очередь…</span></div>`
-    : active.length
-      ? `<ol class="task-list" aria-label="Очередь задач">${active.map((task, index) => renderTask(task, index)).join("")}</ol>`
+    : visibleTasks.length
+      ? `<ol class="task-list ${showingToday ? "" : "completed-list"}" aria-label="${showingToday ? "Очередь задач" : "Выполненные сегодня задачи"}">${visibleTasks.map((task, index) => renderTask(task, index, !showingToday)).join("")}</ol>`
       : loadFailed
         ? `<div class="empty-state load-error-state">
              <span class="empty-mark" aria-hidden="true">!</span>
@@ -151,7 +145,7 @@ function render(): void {
              <button class="retry-button" type="button" data-retry-load>Повторить</button>
            </div>`
         : `<div class="empty-state">
-           <strong>Задач пока нет</strong>
+           <strong>${showingToday ? "Задач пока нет" : "Выполненных задач сегодня нет"}</strong>
          </div>`;
 
   root.innerHTML = `
@@ -159,30 +153,31 @@ function render(): void {
       <aside class="sidebar" aria-label="taskMaster">
         <a class="brand" href="#today" aria-label="taskMaster — Сегодня">task<span>Master</span></a>
         <nav class="navigation" aria-label="Разделы">
-          <a class="nav-item is-current" href="#today" aria-current="page"><span class="nav-index">01</span>Сегодня<span class="nav-count">${activeTasks().length}</span></a>
+          <a class="nav-item ${showingToday ? "is-current" : ""}" href="#today" data-view="today" ${showingToday ? 'aria-current="page"' : ""}><span class="nav-index">01</span>Сегодня<span class="nav-count">${active.length}</span></a>
+          <a class="nav-item ${showingToday ? "" : "is-current"}" href="#completed" data-view="completed" ${showingToday ? "" : 'aria-current="page"'}><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedToday.length}</span></a>
         </nav>
         <button class="theme-switch" type="button" data-theme-switch aria-label="Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить">
           <span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy">Тема <span class="theme-label">${themeLabels[theme]}</span></span>
         </button>
       </aside>
 
-      <main class="main-content" id="today">
+      <main class="main-content ${showingToday ? "is-today-view" : "is-completed-view"}" id="${showingToday ? "today" : "completed"}">
         <section class="day-heading" aria-labelledby="page-title">
           <div>
             <p class="eyebrow">${escapeHtml(dateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date())}</p>
-            <h1 id="page-title">План на день<span class="heading-period">.</span></h1>
+            <h1 id="page-title">${showingToday ? 'План на день<span class="heading-period">.</span>' : 'Выполнено<span class="heading-period">.</span>'}</h1>
           </div>
-          <div class="day-progress" aria-label="Активных задач: ${active.length}">
-            <span class="progress-count">${String(active.length).padStart(2, "0")}</span>
+          <div class="day-progress" aria-label="${showingToday ? "Активных" : "Выполненных сегодня"} задач: ${visibleTasks.length}">
+            <span class="progress-count">${String(visibleTasks.length).padStart(2, "0")}</span>
           </div>
         </section>
 
-        <form class="quick-add" id="quick-add-form">
+        ${showingToday ? `<form class="quick-add" id="quick-add-form">
           <input id="new-task-title" name="title" type="text" autocomplete="off"
             placeholder="Новая задача" aria-label="Название новой задачи" ${saving ? "disabled" : ""} />
           <kbd>ENTER <span aria-hidden="true">↵</span></kbd>
           <button class="add-button" type="submit" aria-label="Добавить задачу" ${saving ? "disabled" : ""}>＋</button>
-        </form>
+        </form>` : ""}
 
         <p class="error-banner" role="alert" ${errorMessage ? "" : "hidden"}>
           <span aria-hidden="true">!</span> ${escapeHtml(errorMessage)}
@@ -191,25 +186,16 @@ function render(): void {
         <section class="queue-section" aria-labelledby="queue-title">
           <div class="section-heading">
             <div class="section-title-wrap">
-              <h2 id="queue-title">Очередь</h2>
+              <h2 id="queue-title">${showingToday ? "Очередь" : "Сегодня"}</h2>
             </div>
           </div>
           ${taskList}
         </section>
-
-        <div class="section-resizer" data-section-resizer ${completed.length ? "" : "hidden"} role="separator" aria-orientation="horizontal" aria-label="Изменить высоту выполненных задач" aria-valuemin="60" aria-valuemax="480" aria-valuenow="${completedPanelHeight ?? 112}" tabindex="0"></div>
-        <details class="completed-section ${completed.length ? "" : "is-empty"}" ${completed.length ? "" : "aria-disabled=\"true\""} ${completedOpen && completed.length ? "open" : ""}>
-          <summary>
-            <span class="summary-left"><span class="summary-chevron" aria-hidden="true">›</span><span>Выполнено</span><span class="section-count">${completed.length}</span></span>
-          </summary>
-          ${completed.length ? `<ol class="task-list completed-list" aria-label="Выполненные задачи">${completed.map((task, index) => renderTask(task, index, true)).join("")}</ol>` : ""}
-        </details>
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
     </div>`;
 
   bindEvents();
-  setCompletedHeight(completedOpen ? completedPanelHeight : null);
   if (editingTaskId) {
     const input = root.querySelector<HTMLInputElement>(".rename-input");
     input?.focus();
@@ -252,64 +238,22 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  root.querySelectorAll<HTMLAnchorElement>("[data-view]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      const nextView = link.dataset.view as View | undefined;
+      if (!nextView || nextView === activeView) return;
+      activeView = nextView;
+      window.history.pushState(null, "", `#${activeView}`);
+      render();
+    });
+  });
+
   root.querySelector<HTMLButtonElement>("[data-theme-switch]")?.addEventListener("click", () => {
     theme = themeOrder[(themeOrder.indexOf(theme) + 1) % themeOrder.length]!;
     try { localStorage.setItem(themeStorageKey, theme); } catch { /* Theme remains active for this session. */ }
     applyTheme();
     updateThemeButton();
-  });
-
-  root.querySelector<HTMLDetailsElement>(".completed-section")?.addEventListener("toggle", (event) => {
-    const details = event.currentTarget as HTMLDetailsElement;
-    completedOpen = details.open;
-    if (completedOpen && completedPanelHeight === null) {
-      const main = root.querySelector<HTMLElement>(".main-content");
-      if (main) completedPanelHeight = Math.min(112, Math.round(main.clientHeight * 0.18));
-    }
-    setCompletedHeight(completedOpen ? completedPanelHeight : null);
-  });
-
-  const resizer = root.querySelector<HTMLElement>("[data-section-resizer]");
-  const main = root.querySelector<HTMLElement>(".main-content");
-  const resizeCompleted = (clientY: number): void => {
-    if (!main) return;
-    const paddingBottom = Number.parseFloat(getComputedStyle(main).paddingBottom) || 0;
-    const available = main.getBoundingClientRect().bottom - paddingBottom - clientY;
-    const max = Math.max(60, main.clientHeight - 260);
-    completedPanelHeight = Math.round(Math.min(max, Math.max(60, available)));
-    setCompletedHeight(completedPanelHeight);
-    try { localStorage.setItem(completedHeightStorageKey, String(completedPanelHeight)); } catch { /* Keep the current size for this session. */ }
-    resizer?.setAttribute("aria-valuenow", String(completedPanelHeight));
-  };
-  resizer?.addEventListener("mousedown", (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    if (!completedOpen) {
-      const details = root.querySelector<HTMLDetailsElement>(".completed-section");
-      if (details) details.open = true;
-    }
-    document.body.classList.add("is-resizing-sections");
-    const move = (moveEvent: MouseEvent): void => resizeCompleted(moveEvent.clientY);
-    const stop = (): void => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", stop);
-      document.body.classList.remove("is-resizing-sections");
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", stop);
-  });
-  resizer?.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-    event.preventDefault();
-    const current = completedPanelHeight ?? Math.min(112, Math.round((main?.clientHeight ?? 720) * 0.18));
-    if (!main) return;
-    const paddingBottom = Number.parseFloat(getComputedStyle(main).paddingBottom) || 0;
-    const desired = current + (event.key === "ArrowUp" ? 20 : -20);
-    resizeCompleted(main.getBoundingClientRect().bottom - paddingBottom - desired);
-  });
-
-  root.querySelector<HTMLDetailsElement>(".completed-section.is-empty > summary")?.addEventListener("click", (event) => {
-    event.preventDefault();
   });
 
   root.querySelector<HTMLButtonElement>("[data-retry-load]")?.addEventListener("click", () => {
@@ -486,6 +430,12 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
 applyTheme();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (theme === "system") applyTheme();
+});
+window.addEventListener("popstate", () => {
+  const nextView: View = window.location.hash === "#completed" ? "completed" : "today";
+  if (nextView === activeView) return;
+  activeView = nextView;
+  render();
 });
 render();
 void refreshTasks();
