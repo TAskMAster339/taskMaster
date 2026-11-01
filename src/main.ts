@@ -27,7 +27,7 @@ let saving = false;
 let errorMessage = "";
 let loadFailed = false;
 let editingTaskId: string | null = null;
-let draggedTaskId: string | null = null;
+let pointerDragActive = false;
 let announcement = "";
 
 const dateLabel = new Intl.DateTimeFormat("ru-RU", {
@@ -76,7 +76,8 @@ function renderTask(task: Task, index: number, completed = false): string {
     : `<span class="task-title">${escapeHtml(task.title)}</span>`;
 
   return `
-    <li class="task-row ${completed ? "is-completed" : ""}" data-task-id="${task.id}" draggable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок."`}>
+    <li class="task-row ${completed ? "is-completed" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок."`}>
+      ${completed ? "" : `<span class="task-position" aria-label="Задача ${index + 1}">${String(index + 1).padStart(2, "0")}</span>`}
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
         aria-pressed="${completed}" ${saving ? "disabled" : ""}>
@@ -85,8 +86,7 @@ function renderTask(task: Task, index: number, completed = false): string {
       <div class="task-content">${title}</div>
       ${completed
         ? `<span class="completed-label">Готово</span>`
-        : `<span class="task-position" aria-label="Задача ${index + 1}">${String(index + 1).padStart(2, "0")}</span>
-           <button class="icon-button edit-task" type="button" data-edit-task="${task.id}" aria-label="Изменить название: ${escapeHtml(task.title)}" title="Изменить название">✎</button>`}
+        : `<button class="icon-button edit-task" type="button" data-edit-task="${task.id}" aria-label="Изменить название: ${escapeHtml(task.title)}" title="Изменить название">✎</button>`}
     </li>`;
 }
 
@@ -117,7 +117,6 @@ function render(): void {
         <nav class="navigation" aria-label="Разделы">
           <a class="nav-item is-current" href="#today" aria-current="page"><span class="nav-index">01</span>Сегодня<span class="nav-count">${activeTasks().length}</span></a>
         </nav>
-        <div class="sidebar-note"><span class="local-mark" aria-hidden="true"></span><span>ЛИЧНОЕ ПРОСТРАНСТВО<br>Работает офлайн</span></div>
       </aside>
 
       <main class="main-content" id="today">
@@ -134,7 +133,6 @@ function render(): void {
         </section>
 
         <form class="quick-add" id="quick-add-form">
-          <span class="add-symbol" aria-hidden="true">＋</span>
           <input id="new-task-title" name="title" type="text" autocomplete="off"
             placeholder="Новая задача" aria-label="Название новой задачи" ${saving ? "disabled" : ""} />
           <kbd>ENTER <span aria-hidden="true">↵</span></kbd>
@@ -165,7 +163,6 @@ function render(): void {
               <ol class="task-list completed-list" aria-label="Выполненные задачи">${completed.map((task, index) => renderTask(task, index, true)).join("")}</ol>
             </details>`
           : ""}
-        <footer class="app-footer"><span>ALT + ↑ / ↓ — переместить задачу</span><span class="footer-brand">TASKMASTER / 0.1</span></footer>
       </main>
       <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
     </div>`;
@@ -272,39 +269,54 @@ function bindEvents(): void {
     });
   });
 
-  root.querySelectorAll<HTMLLIElement>(".task-row[draggable=true]").forEach((row) => {
-    row.addEventListener("dragstart", (event) => {
-      draggedTaskId = row.dataset.taskId ?? null;
-      row.classList.add("is-dragging");
-      event.dataTransfer?.setData("text/plain", draggedTaskId ?? "");
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-    });
-    row.addEventListener("dragend", () => {
-      draggedTaskId = null;
-      row.classList.remove("is-dragging");
-      root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target"));
-    });
-    row.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      if (row.dataset.taskId !== draggedTaskId) row.classList.add("drop-target");
-    });
-    row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
-    row.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const targetId = row.dataset.taskId;
-      const sourceId = event.dataTransfer?.getData("text/plain") || draggedTaskId;
-      if (!targetId || !sourceId || sourceId === targetId) return;
-      const ids = activeTasks().map((task) => task.id);
-      const sourceIndex = ids.indexOf(sourceId);
-      const targetIndex = ids.indexOf(targetId);
-      if (sourceIndex < 0 || targetIndex < 0) return;
-      ids.splice(sourceIndex, 1);
-      ids.splice(targetIndex, 0, sourceId);
-      void saveOrder(ids, targetIndex);
+  root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
+    row.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button, input, a"))) return;
+      const sourceId = row.dataset.taskId;
+      if (!sourceId) return;
+      const startX = event.clientX;
+      const startY = event.clientY;
+      pointerDragActive = false;
+
+      const handlePointerMove = (moveEvent: PointerEvent): void => {
+        if (!pointerDragActive && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) return;
+        pointerDragActive = true;
+        moveEvent.preventDefault();
+        row.classList.add("is-dragging");
+        const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
+        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target"));
+        if (target && target.dataset.taskId !== sourceId) target.classList.add("drop-target");
+      };
+
+      const handlePointerUp = (upEvent: PointerEvent): void => {
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerUp);
+        const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
+        const targetId = target?.dataset.taskId;
+        const shouldSave = pointerDragActive && targetId && targetId !== sourceId;
+        row.classList.remove("is-dragging");
+        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target"));
+        pointerDragActive = false;
+        if (!shouldSave || !target) return;
+
+        const ids = activeTasks().map((task) => task.id);
+        const sourceIndex = ids.indexOf(sourceId);
+        const targetIndex = ids.indexOf(targetId);
+        if (sourceIndex < 0 || targetIndex < 0) return;
+        const afterTarget = upEvent.clientY >= target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+        ids.splice(sourceIndex, 1);
+        let destinationIndex = targetIndex - (sourceIndex < targetIndex ? 1 : 0) + (afterTarget ? 1 : 0);
+        destinationIndex = Math.max(0, Math.min(destinationIndex, ids.length));
+        ids.splice(destinationIndex, 0, sourceId);
+        if (ids.some((id, index) => id !== activeTasks()[index]?.id)) void saveOrder(ids, destinationIndex);
+      };
+
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
     });
   });
 
-  root.querySelectorAll<HTMLLIElement>(".task-row[draggable=true]").forEach((row) => {
+  root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("keydown", (event) => {
       if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
       event.preventDefault();
