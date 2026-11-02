@@ -1,4 +1,5 @@
 mod desktop;
+mod notifications;
 mod shortcuts;
 mod storage;
 mod tasks;
@@ -537,28 +538,32 @@ fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
 
 fn notify_reminder(app: &AppHandle, reminder: DueReminder) {
     use tauri_plugin_notification::NotificationExt;
-    let _ = app
-        .notification()
-        .builder()
-        .title("taskMaster")
-        .body(&reminder.title)
-        .extra("taskId", serde_json::Value::String(reminder.task_id))
-        .show()
-        .map_err(|_| app.emit("reminder-delivery-error", ()))
-        .ok();
+    let result = notifications::ensure_available(app).and_then(|()| {
+        app.notification()
+            .builder()
+            .title("taskMaster")
+            .body(&reminder.title)
+            .extra("taskId", serde_json::Value::String(reminder.task_id))
+            .show()
+            .map_err(|_| notifications::delivery_error())
+    });
+    if let Err(error) = result {
+        let _ = app.emit("reminder-delivery-error", error.message);
+    }
 }
 
 fn notify_timer_finished(app: &AppHandle, timer: Timer) {
     use tauri_plugin_notification::NotificationExt;
-    if app
-        .notification()
-        .builder()
-        .title("Таймер завершён")
-        .body(&timer.name)
-        .show()
-        .is_err()
-    {
-        let _ = app.emit("timer-notification-error", ());
+    let result = notifications::ensure_available(app).and_then(|()| {
+        app.notification()
+            .builder()
+            .title("Таймер завершён")
+            .body(&timer.name)
+            .show()
+            .map_err(|_| notifications::delivery_error())
+    });
+    if let Err(error) = result {
+        let _ = app.emit("timer-notification-error", error.message);
     }
     let _ = app.emit("timer-finished", timer);
 }
@@ -1089,6 +1094,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            notifications::get_notification_status,
+            notifications::send_test_notification,
+            notifications::open_notification_settings,
             desktop::get_autostart_enabled,
             desktop::set_autostart_enabled,
             get_backup_status,

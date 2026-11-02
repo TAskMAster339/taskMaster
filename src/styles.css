@@ -404,8 +404,8 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .shortcut-row [data-shortcut-status]:empty { display: none; }
 @media (max-width: 680px) { .shortcut-row { grid-template-columns: minmax(0, 1fr) auto; } .shortcut-row > div:first-child { grid-column: 1 / -1; } }
 
-.backup-actions { display: flex; flex-wrap: wrap; gap: 12px; }
-.backup-actions button { max-width: 100%; white-space: normal; text-align: left; }
+.backup-actions, .settings-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.backup-actions button, .settings-actions button { max-width: 100%; white-space: normal; text-align: left; }
 .backup-warning { color: var(--obi); }
 .backup-source { overflow-wrap: anywhere; }
 .backup-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; }
@@ -415,3 +415,5 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .settings-section .settings-check { display: flex; gap: 12px; align-items: center; min-height: 44px; margin: 0; cursor: pointer; }
 .settings-section .settings-check input { width: 22px; height: 22px; min-height: 22px; flex: 0 0 22px; margin: 0; accent-color: var(--obi); }
 .settings-check:has(input:disabled) { cursor: default; }
+
+[data-notification-permission].is-blocked, [data-reminder-notification-warning] p { color: var(--obi); }

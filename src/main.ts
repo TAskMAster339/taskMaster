@@ -117,6 +117,55 @@ function bindAutostartSettings(): void {
   });
 }
 
+interface NotificationStatus { state: string; message: string; canTest: boolean; usesSystemIdentity: boolean; }
+let notificationStatus: NotificationStatus | null = null;
+let notificationBusy = false;
+let notificationReadError = "";
+let notificationActionMessage = "";
+function updateNotificationControls(): void {
+  const status = root.querySelector<HTMLElement>("[data-notification-permission]");
+  if (status) { status.textContent = notificationStatus?.message ?? (notificationReadError || "Проверка состояния…"); status.classList.toggle("is-blocked", notificationStatus !== null && !notificationStatus.canTest); }
+  const hint = root.querySelector<HTMLElement>("[data-notification-identity]");
+  if (hint) hint.hidden = !notificationStatus?.usesSystemIdentity;
+  const message = root.querySelector<HTMLElement>("[data-notification-result]");
+  if (message) message.textContent = notificationActionMessage;
+  root.querySelectorAll<HTMLButtonElement>("[data-notification-test], [data-notification-refresh]").forEach((button) => { button.disabled = notificationBusy || (button.hasAttribute("data-notification-test") && !notificationStatus?.canTest); });
+  const warning = root.querySelector<HTMLElement>("[data-reminder-notification-warning]");
+  if (warning) { warning.hidden = notificationStatus === null || notificationStatus.canTest; warning.querySelector<HTMLElement>("p")!.textContent = notificationStatus?.message ?? ""; }
+}
+async function refreshNotificationStatus(): Promise<void> {
+  if (notificationBusy) return;
+  notificationBusy = true; updateNotificationControls();
+  try { notificationStatus = await invoke<NotificationStatus>("get_notification_status"); notificationReadError = ""; }
+  catch (error) { notificationStatus = null; notificationReadError = backendMessage(error); }
+  finally { notificationBusy = false; updateNotificationControls(); }
+}
+function renderNotificationSettings(): string {
+  return `<section class="settings-section" aria-labelledby="notifications-heading"><h2 id="notifications-heading">Уведомления</h2>
+    <p data-notification-permission role="status" class="${notificationStatus !== null && !notificationStatus.canTest ? "is-blocked" : ""}">${escapeHtml(notificationStatus?.message ?? (notificationReadError || "Проверка состояния…"))}</p>
+    <p>Напоминания работают, пока taskMaster запущен, в том числе в трее.</p>
+    <p data-notification-identity ${notificationStatus?.usesSystemIdentity ? "" : "hidden"}>В этой сборке отправитель — Windows PowerShell.</p>
+    <div class="settings-actions"><button class="retry-button" type="button" data-notification-test ${notificationBusy || !notificationStatus?.canTest ? "disabled" : ""}>Проверить уведомление</button>
+    <button class="retry-button" type="button" data-notification-refresh ${notificationBusy ? "disabled" : ""}>Обновить состояние</button>
+    <button class="retry-button" type="button" data-open-notification-settings>Настройки Windows</button></div>
+    <p role="status" data-notification-result>${escapeHtml(notificationActionMessage)}</p>
+  </section>`;
+}
+function bindNotificationControls(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-open-notification-settings]").forEach((button) => button.addEventListener("click", async () => {
+    try { await invoke("open_notification_settings"); }
+    catch (error) { notificationActionMessage = backendMessage(error); errorMessage = notificationActionMessage; if (activeView === "settings") updateNotificationControls(); else render(true); }
+  }));
+  root.querySelector<HTMLButtonElement>("[data-notification-refresh]")?.addEventListener("click", () => { void refreshNotificationStatus(); });
+  root.querySelector<HTMLButtonElement>("[data-notification-test]")?.addEventListener("click", async () => {
+    if (notificationBusy) return;
+    notificationBusy = true; notificationActionMessage = "Отправка…"; updateNotificationControls();
+    try { await invoke("send_test_notification"); notificationActionMessage = "Тестовое уведомление отправлено."; }
+    catch (error) { notificationActionMessage = backendMessage(error); }
+    finally { notificationBusy = false; updateNotificationControls(); void refreshNotificationStatus(); }
+  });
+}
+
 interface BackupStatus { directory: string; warning: string | null; databaseAvailable: boolean; hasDailyCopy: boolean; }
 interface RestorePreview { token: string; source: string; tasks: number; events: number; timers: number; }
 let backupStatus: BackupStatus | null = null;
@@ -611,6 +660,7 @@ function renderSettings(): void {
     <select id="settings-theme" data-theme-select>${themeOrder.map((value) => `<option value="${value}" ${theme === value ? "selected" : ""}>${themeLabels[value]}</option>`).join("")}</select>
     <p role="alert" data-settings-error></p></section>
     ${renderAutostartSettings()}
+    ${renderNotificationSettings()}
     <section class="settings-section"><h2>Задачи</h2><form data-preferences-form>
       <label for="reminder-minutes">Время до напоминания, минуты</label><input id="reminder-minutes" name="reminderMinutes" type="number" min="1" max="1439" step="1" required value="${preferences.reminderMinutes}" ${preferencesReady ? "" : "disabled"}/>
       <label for="archive-hours">Архивировать через, часы</label><input id="archive-hours" name="archiveHours" type="number" min="1" max="8760" step="1" required value="${preferences.archiveHours}" ${preferencesReady ? "" : "disabled"}/>
@@ -775,7 +825,7 @@ function render(allowDuringAnimation = false): void {
         ${reminderEditingTaskId ? (() => {
           const task = tasks.find((item) => item.id === reminderEditingTaskId);
           if (!task) return "";
-          return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Время сегодня</label><input id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
+          return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Время сегодня</label><input id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div data-reminder-notification-warning ${notificationStatus !== null && !notificationStatus.canTest ? "" : "hidden"}><p>${escapeHtml(notificationStatus?.message ?? "")}</p><button class="retry-button" type="button" data-open-notification-settings>Настройки Windows</button></div><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
         })() : ""}
         ${overlayShortcutDialogOpen ? `<dialog class="reminder-dialog" data-overlay-shortcut-dialog><form data-overlay-shortcut-form><h2>Горячая клавиша</h2><label for="overlay-shortcut-input">Сочетание клавиш</label><input id="overlay-shortcut-input" name="shortcut" type="text" value="${escapeHtml(overlayShortcut)}" placeholder="Ctrl+Shift+O" required aria-describedby="overlay-shortcut-help"/><small id="overlay-shortcut-help">Например: Ctrl+Shift+O</small><p class="reminder-dialog-error" role="alert">${escapeHtml(overlayShortcutError)}</p><div class="reminder-actions"><button type="button" data-close-overlay-shortcut>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>` : ""}
 
@@ -875,6 +925,7 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  bindNotificationControls();
   root.querySelectorAll<HTMLButtonElement>("[data-add-timer]").forEach((button) => button.addEventListener("click", () => { timerError = ""; timerDialogOpen = true; render(true); }));
   root.querySelector<HTMLButtonElement>("[data-close-timer]")?.addEventListener("click", () => { timerDialogOpen = false; timerError = ""; render(true); });
   root.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) { timerDialogOpen = false; render(true); } });
@@ -1537,16 +1588,19 @@ void listen<string>("reminder-open-task", async ({ payload }) => {
   row?.scrollIntoView({ behavior: "smooth", block: "center" });
   window.setTimeout(() => { highlightedReminderTaskId = null; render(true); }, 4_000);
 });
-void listen("reminder-delivery-error", () => {
-  errorMessage = "Не удалось показать уведомление. Проверьте Параметры Windows → Система → Уведомления.";
-  render(true);
+void listen<string | null>("reminder-delivery-error", ({ payload }) => {
+  errorMessage = typeof payload === "string" ? payload : "Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления.";
+  notificationActionMessage = errorMessage;
+  if (activeView === "settings") updateNotificationControls(); else render(true);
+  void refreshNotificationStatus();
 });
 void listen("reminder-runtime-error", () => {
   errorMessage = "Не удалось обработать напоминание. Перезапустите приложение.";
   render(true);
 });
 void refreshAutostart();
-window.addEventListener("focus", () => { if (activeView === "settings") void refreshAutostart(); });
+void refreshNotificationStatus();
+window.addEventListener("focus", () => { if (activeView === "settings") void refreshAutostart(); void refreshNotificationStatus(); });
 void refreshBackupStatus();
 void invoke<typeof preferences>("get_preferences").then((value) => { preferences = value; preferencesReady = true; if (activeView === "settings") render(true); }).catch((error) => { preferencesError = backendMessage(error); if (activeView === "settings") render(true); });
 render();
@@ -1592,9 +1646,11 @@ void listen<Timer>("timer-finished", async ({ payload }) => {
   announcement = `Таймер завершён: ${payload.name}.`;
   await refreshTimers();
 });
-void listen("timer-notification-error", () => {
-  timerError = "Не удалось показать уведомление. Проверьте Параметры Windows → Система → Уведомления.";
-  if (activeView === "timers") render(true);
+void listen<string | null>("timer-notification-error", ({ payload }) => {
+  timerError = typeof payload === "string" ? payload : "Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления.";
+  notificationActionMessage = timerError;
+  if (activeView === "timers") render(true); else if (activeView === "settings") updateNotificationControls();
+  void refreshNotificationStatus();
 });
 void listen("timer-runtime-error", () => {
   timerError = "Не удалось сохранить состояние таймера.";
