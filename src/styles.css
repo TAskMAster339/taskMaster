@@ -442,6 +442,10 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .about-links a { color: var(--text); text-decoration: underline; text-underline-offset: 4px; min-height: 44px; display: inline-flex; align-items: center; }
 .about-links a:hover { color: var(--obi); }
 
+.danger-action { min-height: 44px; padding: 10px 14px; border: 1px solid var(--danger); background: var(--surface); color: var(--text); font: inherit; line-height: 1.4; cursor: pointer; }
+.danger-action:hover:not(:disabled) { background: var(--surface-soft); }
+.danger-action:disabled { cursor: not-allowed; opacity: .55; }
+
 @font-face { font-family: "Noto Sans JP"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/fonts/noto-sans-jp.ttf") format("truetype"); }
 :lang(ja) { font-family: "Noto Sans JP", "IBM Plex Sans", sans-serif; }
 :lang(ja) :is(h1, h2, h3, button, input, select, .nav-link) { font-family: inherit; letter-spacing: normal; }

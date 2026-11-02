@@ -203,3 +203,18 @@ test('new scroll input cancels deferred reminder restoration', async () => {
   assert.deepEqual(errors, []);
  } finally { await context.close(); }
 });
+
+test('data actions remain readable in normal light and dark themes', async () => {
+ const { context, page, errors } = await fixture();
+ try {
+  await page.locator('[data-view="settings"]').click();
+  for (const theme of ['light', 'dark']) {
+   await page.locator('[data-theme-select]').selectOption(theme);
+   await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme);
+   await page.locator('[data-clear-data="tasks"]').scrollIntoViewIfNeeded();
+   const scan = await new AxeBuilder({ page }).include('[data-clear-data]').withRules(['color-contrast']).analyze();
+   assert.deepEqual(scan.violations.map(v => ({ id: v.id, targets: v.nodes.map(n => n.target) })), [], theme);
+  }
+  assert.deepEqual(errors, []);
+ } finally { await context.close(); }
+});
