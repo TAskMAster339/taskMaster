@@ -1,3 +1,4 @@
+mod shortcuts;
 mod tasks;
 
 use std::{
@@ -140,6 +141,33 @@ fn with_store<T>(
     let guard: MutexGuard<'_, Result<TaskStore, AppError>> =
         state.store.lock().map_err(|_| AppError::lock())?;
     action(guard.as_ref().map_err(Clone::clone)?)
+}
+
+#[tauri::command]
+fn get_shortcuts(
+    state: State<'_, AppState>,
+) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+    with_store(&state, TaskStore::shortcuts)
+}
+#[tauri::command]
+fn update_shortcut(
+    action: String,
+    combination: String,
+    state: State<'_, AppState>,
+    overlay: State<'_, OverlayState>,
+    app: AppHandle,
+) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+    let global = overlay
+        .settings
+        .lock()
+        .map_err(|_| AppError::lock())?
+        .shortcut
+        .clone();
+    let result = with_store(&state, |store| {
+        store.set_shortcut(&action, &combination, &global)
+    })?;
+    let _ = app.emit("shortcuts-changed", &result);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -619,16 +647,15 @@ fn set_overlay_shortcut(
     shortcut: String,
     app: AppHandle,
     state: State<'_, OverlayState>,
+    store: State<'_, AppState>,
 ) -> Result<OverlayShortcutStatus, AppError> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    let shortcut = shortcut.trim();
-    if shortcut.is_empty() || !shortcut.contains('+') {
-        return Err(AppError {
-            code: "invalid_shortcut",
-            message: "Укажите сочетание клавиш, например Ctrl+Shift+O.".into(),
-        });
-    }
+    let shortcut = shortcuts::normalize(&shortcut)?;
+    with_store(&store, |store| {
+        shortcuts::validate(&store.shortcuts()?, &shortcut)
+    })?;
+    let shortcut = shortcut.as_str();
     let old_shortcut = state
         .settings
         .lock()
@@ -858,6 +885,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_shortcuts,
+            update_shortcut,
             get_preferences,
             update_preferences,
             export_user_data,

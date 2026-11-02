@@ -407,7 +407,7 @@ fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     assert_eq!(violations, 0);
 }
 
@@ -490,7 +490,7 @@ fn migration_preserves_legacy_focus_history_without_blocking_task_completion() {
         let connection = Connection::open(&database.0).unwrap();
         connection.execute("INSERT INTO focus_sessions(id,task_id,duration_seconds,started_at,running_since,status) VALUES('legacy-session',?1,60,1000,1000,'active')", [&task_id]).unwrap();
         connection
-            .execute_batch("DROP INDEX timers_created; DROP TABLE timers; DROP TABLE preferences; PRAGMA user_version=4;")
+            .execute_batch("DROP INDEX timers_created; DROP TABLE timers; DROP TABLE preferences; DROP TABLE keyboard_shortcuts; PRAGMA user_version=4;")
             .unwrap();
     }
 
@@ -629,4 +629,33 @@ fn preferences_persist_validate_and_control_archive_boundary() {
     assert_eq!(store.archive_expired_tasks(1000 + 7_200_000).unwrap(), 1);
     assert_eq!(store.archive_expired_tasks(1000 + 7_200_001).unwrap(), 0);
     assert_eq!(store.list_tasks().unwrap()[0].id, id);
+}
+
+#[test]
+fn custom_shortcuts_persist_and_reject_conflicts_without_overwriting() {
+    let db = TemporaryDatabase::new();
+    {
+        let store = TaskStore::open(&db.0).unwrap();
+        store
+            .set_shortcut("new_task", "Ctrl+Shift+T", "Ctrl+Alt+Space")
+            .unwrap();
+        assert!(
+            store
+                .set_shortcut("new_task", "Ctrl+R", "Ctrl+Alt+Space")
+                .is_err()
+        );
+        assert!(
+            store
+                .set_shortcut("new_task", "Ctrl+Alt+Space", "Ctrl+Alt+Space")
+                .is_err()
+        );
+        assert_eq!(store.shortcuts().unwrap()["new_task"], "Ctrl+Shift+T");
+    }
+    let store = TaskStore::open(&db.0).unwrap();
+    assert_eq!(store.shortcuts().unwrap()["new_task"], "Ctrl+Shift+T");
+    assert_eq!(store.shortcuts().unwrap()["rename"], "F2");
+    assert_eq!(
+        store.export_data().unwrap()["keyboard_shortcuts"][0]["action"],
+        "new_task"
+    );
 }

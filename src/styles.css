@@ -394,3 +394,12 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 :where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area)::-webkit-scrollbar-thumb:hover { background: var(--riso); }
 :where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area)::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 :where(.settings-view, .timer-grid)::-webkit-scrollbar-corner { background: var(--surface-soft); }
+
+.shortcut-section { max-width: 760px; }
+.shortcut-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, 190px) auto; align-items: center; gap: 12px; padding-block: 16px; border-bottom: 1px solid var(--line); }
+.shortcut-row label { margin: 0; }
+.shortcut-row small { color: var(--muted); }
+.shortcut-row input { margin: 0; cursor: pointer; }
+.shortcut-row [data-shortcut-status] { grid-column: 1 / -1; margin: 0; }
+.shortcut-row [data-shortcut-status]:empty { display: none; }
+@media (max-width: 680px) { .shortcut-row { grid-template-columns: minmax(0, 1fr) auto; } .shortcut-row > div:first-child { grid-column: 1 / -1; } }

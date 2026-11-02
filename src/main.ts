@@ -1,3 +1,4 @@
+import { defaultShortcuts, shortcutLabels, keyboardCombination, displayShortcut, type ShortcutAction } from "./shortcuts";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -79,6 +80,9 @@ let fullscreenTimerId: string | null = null;
 let preferences = { reminderMinutes: 15, archiveHours: 24 };
 let preferencesReady = false;
 let preferencesError = "";
+let shortcuts = { ...defaultShortcuts };
+let shortcutsReady = false;
+let shortcutsError = "";
 let overlayShortcut = "Ctrl+Alt+Space";
 let overlayShortcutAvailable = true;
 let overlayShortcutDialogOpen = false;
@@ -452,7 +456,7 @@ function renderTask(task: Task, index: number, completed = false): string {
     : `<span class="task-title">${escapeHtml(task.title)}</span>`;
 
   return `
-    <li class="task-row ${completed ? "is-completed" : ""} ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown F2" aria-label="${escapeHtml(task.title)}. Alt и стрелки вверх или вниз меняют порядок. F2 изменяет название."`}>
+    <li class="task-row ${completed ? "is-completed" : ""} ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="${shortcuts.move_up} ${shortcuts.move_down} ${shortcuts.rename}" aria-label="${escapeHtml(task.title)}. ${escapeHtml(displayShortcut(shortcuts.move_up))} и ${escapeHtml(displayShortcut(shortcuts.move_down))} меняют порядок. ${escapeHtml(displayShortcut(shortcuts.rename))} изменяет название."`}>
       <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
       <button class="task-check ${completed ? "checked" : ""}" type="button"
         data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
@@ -497,9 +501,42 @@ function renderSettings(): void {
       <p>Срок отсчитывается от создания задачи. Архив сохраняет задачи и историю.</p>
       <button class="retry-button" type="submit" ${preferencesReady ? "" : "disabled"}>Сохранить</button><p role="status" data-preferences-status>${escapeHtml(preferencesError)}</p>
     </form></section>
+    <section class="settings-section shortcut-section" aria-labelledby="shortcuts-heading"><h2 id="shortcuts-heading">Горячие клавиши</h2>
+      <p>Нажмите поле и сочетание клавиш, затем сохраните. Escape отменяет ввод. Команды задач работают при фокусе на строке.</p>
+      <p role="alert">${escapeHtml(shortcutsError)}</p>
+      <div class="shortcut-table" role="table" aria-label="Горячие клавиши">
+      ${([...Object.keys(shortcutLabels), "overlay"] as (ShortcutAction | "overlay")[]).map((action) => {
+        const value = action === "overlay" ? overlayShortcut : shortcuts[action];
+        return `<form class="shortcut-row" role="row" data-shortcut-form="${action}"><div role="cell"><label for="shortcut-${action}">${action === "overlay" ? "Показать / скрыть оверлей" : shortcutLabels[action]}</label><small>${action === "overlay" ? "Глобально" : "В приложении"}</small></div><div role="cell"><input id="shortcut-${action}" data-shortcut-capture data-combination="${escapeHtml(value)}" value="${escapeHtml(displayShortcut(value))}" readonly aria-label="Сочетание: ${action === "overlay" ? "Оверлей" : shortcutLabels[action]}" ${shortcutsReady ? "" : "disabled"}/></div><div role="cell"><button class="retry-button" type="submit" ${shortcutsReady ? "" : "disabled"}>Сохранить</button></div><p role="status" data-shortcut-status>${action === "overlay" && !overlayShortcutAvailable ? "Не удалось зарегистрировать сочетание. Выберите другое." : ""}</p></form>`;
+      }).join("")}</div>
+    </section>
     <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p></section>
   </main></div>`;
   bindEvents();
+  root.querySelectorAll<HTMLInputElement>("[data-shortcut-capture]").forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Tab") return;
+      event.preventDefault(); event.stopPropagation();
+      const action = input.closest<HTMLFormElement>("form")!.dataset.shortcutForm as ShortcutAction | "overlay";
+      if (event.key === "Escape") { const value = action === "overlay" ? overlayShortcut : shortcuts[action]; input.dataset.combination = value; input.value = displayShortcut(value); input.blur(); return; }
+      const combination = keyboardCombination(event);
+      if (combination) { input.dataset.combination = combination; input.value = displayShortcut(combination); }
+    });
+  });
+  root.querySelectorAll<HTMLFormElement>("[data-shortcut-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const action = form.dataset.shortcutForm as ShortcutAction | "overlay";
+    const input = form.querySelector<HTMLInputElement>("input")!;
+    const button = form.querySelector<HTMLButtonElement>("button")!;
+    const status = form.querySelector<HTMLElement>("[data-shortcut-status]")!;
+    button.disabled = true; input.disabled = true;
+    try {
+      if (action === "overlay") { const result = await invoke<OverlayShortcutStatus>("set_overlay_shortcut", { shortcut: input.dataset.combination }); overlayShortcut = result.shortcut; overlayShortcutAvailable = result.available; }
+      else shortcuts = await invoke<typeof shortcuts>("update_shortcut", { action, combination: input.dataset.combination });
+      status.textContent = "Сохранено";
+    } catch (error) { status.textContent = backendMessage(error); }
+    finally { button.disabled = false; input.disabled = false; }
+  }));
   root.querySelector<HTMLFormElement>("[data-preferences-form]")?.addEventListener("submit", async (event) => {
     event.preventDefault(); const form = event.currentTarget as HTMLFormElement;
     const values = new FormData(form); const next = { reminderMinutes: Number(values.get("reminderMinutes")), archiveHours: Number(values.get("archiveHours")) };
@@ -1031,23 +1068,7 @@ function bindEvents(): void {
       window.addEventListener("keydown", escape);
     });
 
-    row.addEventListener("keydown", (event) => {
-      if (saving || taskAnimationLocks.has(row.dataset.taskId ?? "")) return;
-      if (event.key === "F2") {
-        event.preventDefault();
-        editingTaskId = row.dataset.taskId ?? null;
-        render();
-        return;
-      }
-      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
-      event.preventDefault();
-      const ids = activeTasks().map((task) => task.id);
-      const index = ids.indexOf(row.dataset.taskId ?? "");
-      const nextIndex = index + (event.key === "ArrowUp" ? -1 : 1);
-      if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return;
-      [ids[index], ids[nextIndex]] = [ids[nextIndex], ids[index]];
-      void saveOrder(ids, nextIndex);
-    });
+
   });
 }
 
@@ -1058,22 +1079,23 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
   const index = activeTasks().findIndex((task) => task.id === movedId);
   if (index >= 0) {
     announcement = `Задача перемещена на позицию ${index + 1} из ${activeTasks().length}.`;
-    root.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(movedId)}"]`)?.focus();
   }
   render();
+  if (index >= 0) root.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(movedId)}"]`)?.focus();
 }
 
 function bindOverlayTimerDrag(card: HTMLElement, pinned: boolean, reorder: (ids: string[]) => void, setDragging: (value: boolean) => void): void {
   card.classList.toggle("is-reorder-locked", pinned);
   card.tabIndex = 0;
-  card.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
+  card.setAttribute("aria-keyshortcuts", `${shortcuts.move_up} ${shortcuts.move_down}`);
   card.onkeydown = (event) => {
-    if (pinned || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    const combination = keyboardCombination(event);
+    if (pinned || (event.target as HTMLElement).closest("button, input") || (combination !== shortcuts.move_up && combination !== shortcuts.move_down)) return;
     event.preventDefault();
     const grid = card.parentElement!;
     const cards = [...grid.querySelectorAll<HTMLElement>("[data-timer-card]")].sort((a, b) => Number(a.style.order) - Number(b.style.order));
     const index = cards.indexOf(card);
-    const target = index + (event.key === "ArrowUp" ? -1 : 1);
+    const target = index + (combination === shortcuts.move_up ? -1 : 1);
     if (target < 0 || target >= cards.length) return;
     [cards[index], cards[target]] = [cards[target], cards[index]];
     cards.forEach((item, position) => { item.style.order = String(position); });
@@ -1355,6 +1377,14 @@ async function renderOverlay(): Promise<void> {
   window.setInterval(() => { void load(); }, 500);
 }
 
+async function loadShortcuts(): Promise<void> {
+  try { shortcuts = await invoke<typeof shortcuts>("get_shortcuts"); shortcutsReady = true; shortcutsError = ""; }
+  catch (error) { shortcutsReady = false; shortcutsError = backendMessage(error); }
+  if (getCurrentWindow().label !== "overlay" && activeView === "settings") render(true);
+}
+void loadShortcuts();
+void listen<typeof shortcuts>("shortcuts-changed", ({ payload }) => { shortcuts = payload; shortcutsReady = true; });
+
 if (getCurrentWindow().label === "overlay") {
   applyTheme();
   document.body.classList.add("overlay-mode");
@@ -1411,6 +1441,35 @@ render();
 void refreshTasks();
 if (activeView === "history") void refreshHistory();
 if (activeView === "timers") void refreshTimers();
+window.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented || event.repeat || !shortcutsReady || mouseDragActive || (event.target as HTMLElement).closest("[data-shortcut-capture]")) return;
+  const combination = keyboardCombination(event);
+  const action = (Object.keys(shortcuts) as ShortcutAction[]).find((key) => shortcuts[key] === combination);
+  if (!action) return;
+  event.preventDefault();
+  if (root.querySelector("dialog[open]")) return;
+  const target = event.target as HTMLElement;
+  const taskAction = ["rename", "reminder", "move_up", "move_down"].includes(action);
+  const row = target.closest<HTMLElement>("[data-task-id][data-reorderable='true']");
+  if (taskAction && (!row || target.closest("input, textarea, select, [contenteditable='true']") || saving || taskAnimationLocks.has(row.dataset.taskId ?? ""))) return;
+  event.preventDefault();
+  if (taskAction && row) {
+    const id = row.dataset.taskId!;
+    if (action === "rename") { editingTaskId = id; render(true); }
+    else if (action === "reminder") row.querySelector<HTMLButtonElement>("[data-edit-reminder]")?.click();
+    else { const ids = activeTasks().map((task) => task.id); const index = ids.indexOf(id); const next = index + (action === "move_up" ? -1 : 1); if (index >= 0 && next >= 0 && next < ids.length) { [ids[index], ids[next]] = [ids[next], ids[index]]; void saveOrder(ids, next); } }
+    return;
+  }
+  if (action === "new_task" && activeView === "today" && !fullscreenTimerId) { root.querySelector<HTMLInputElement>("#new-task-title")?.focus(); return; }
+  fullscreenTimerId = null;
+  const nextView: View = action === "new_task" ? "today" : action === "new_timer" ? "timers" : action as View;
+  activeView = nextView; window.history.pushState(null, "", `#${nextView}`);
+  if (action === "new_timer") { timerDialogOpen = true; timerError = ""; }
+  render(true);
+  if (nextView === "history") void refreshHistory();
+  if (nextView === "timers") void refreshTimers();
+  if (action === "new_task") root.querySelector<HTMLInputElement>("#new-task-title")?.focus();
+});
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && fullscreenTimerId) {
     fullscreenTimerId = null;

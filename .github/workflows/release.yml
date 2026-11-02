@@ -44,6 +44,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cargo test failed" }
           cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed" }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw "frontend tests failed" }
           npm run build
           if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
 

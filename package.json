@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "node --experimental-strip-types --test scripts/shortcuts.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

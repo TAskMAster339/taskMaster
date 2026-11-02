@@ -42,5 +42,8 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      - name: Test frontend keyboard handling
+        run: npm test
+
       - name: Build frontend
         run: npm run build

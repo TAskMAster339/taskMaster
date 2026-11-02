@@ -123,7 +123,7 @@ impl TaskStore {
     fn from_connection(connection: Connection) -> rusqlite::Result<Self> {
         let schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !(0..=6).contains(&schema_version) {
+        if !(0..=7).contains(&schema_version) {
             return Err(rusqlite::Error::InvalidQuery);
         }
 
@@ -239,10 +239,51 @@ impl TaskStore {
             tx.execute_batch("CREATE TABLE preferences (id INTEGER PRIMARY KEY CHECK(id=1), reminder_minutes INTEGER NOT NULL CHECK(reminder_minutes BETWEEN 1 AND 1439), archive_hours INTEGER NOT NULL CHECK(archive_hours BETWEEN 1 AND 8760)); INSERT INTO preferences VALUES(1,15,24); PRAGMA user_version=6;")?;
             tx.commit()?;
         }
+        if schema_version < 7 {
+            let tx = connection.unchecked_transaction()?;
+            tx.execute_batch("CREATE TABLE keyboard_shortcuts(action TEXT PRIMARY KEY NOT NULL, combination TEXT NOT NULL); PRAGMA user_version=7;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection,
             timer_clocks: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn shortcuts(&self) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+        let mut result = crate::shortcuts::defaults();
+        let mut stmt = self
+            .connection
+            .prepare("SELECT action,combination FROM keyboard_shortcuts")
+            .map_err(|_| AppError::storage())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| AppError::storage())?;
+        for row in rows {
+            let (action, key) = row.map_err(|_| AppError::storage())?;
+            if result.contains_key(&action) {
+                result.insert(action, key);
+            }
+        }
+        Ok(result)
+    }
+    pub fn set_shortcut(
+        &self,
+        action: &str,
+        combination: &str,
+        overlay: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+        let key = crate::shortcuts::normalize(combination)?;
+        let mut keys = self.shortcuts()?;
+        if !keys.contains_key(action) {
+            return Err(AppError::invalid_state());
+        }
+        keys.insert(action.into(), key.clone());
+        crate::shortcuts::validate(&keys, overlay)?;
+        self.connection.execute("INSERT INTO keyboard_shortcuts(action,combination) VALUES(?1,?2) ON CONFLICT(action) DO UPDATE SET combination=excluded.combination",params![action,key]).map_err(|_|AppError::storage())?;
+        Ok(keys)
     }
 
     pub fn preferences(&self) -> Result<Preferences, AppError> {
@@ -288,6 +329,7 @@ impl TaskStore {
             "focus_sessions",
             "timers",
             "preferences",
+            "keyboard_shortcuts",
         ] {
             let mut stmt = tx
                 .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
