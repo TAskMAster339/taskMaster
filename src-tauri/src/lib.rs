@@ -141,6 +141,18 @@ fn confirm_permanent_deletion(
     Ok(())
 }
 
+#[tauri::command]
+fn clear_user_data(
+    mode: deletions::ClearMode,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), AppError> {
+    with_store(&state, |store| store.clear_data(mode))?;
+    let _ = app.emit("data-cleared", mode);
+    let _ = app.emit("tasks-changed", ());
+    Ok(())
+}
+
 struct BackupState {
     directory: PathBuf,
     warning: Mutex<Option<String>>,
@@ -717,7 +729,6 @@ fn start_reminder_scheduler(app: AppHandle) {
                     Vec::new()
                 }
             };
-            drop(guard);
             if archived > 0 {
                 let _ = app.emit("tasks-changed", ());
             }
@@ -727,6 +738,7 @@ fn start_reminder_scheduler(app: AppHandle) {
             for timer in finished_timers {
                 notify_timer_finished(&app, timer);
             }
+            drop(guard);
         }
     });
 }
@@ -1225,6 +1237,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            clear_user_data,
             diagnostics::get_diagnostics_warning,
             notifications::get_notification_status,
             notifications::send_test_notification,

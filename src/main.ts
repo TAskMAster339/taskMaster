@@ -738,6 +738,35 @@ function bindBackupSettings(): void {
   if (dialog && !dialog.open) dialog.showModal();
 }
 
+type ClearMode = "tasks" | "allData";
+let clearingData = false;
+function openClearData(mode: ClearMode, trigger: HTMLButtonElement): void {
+  if (clearingData || document.querySelector("[data-clear-dialog]")) return;
+  const dialog = document.createElement("dialog");
+  dialog.className = "reminder-dialog";
+  dialog.dataset.clearDialog = "";
+  dialog.setAttribute("aria-labelledby", "clear-heading");
+  dialog.setAttribute("aria-describedby", "clear-description");
+  dialog.innerHTML = `<form><h2 id="clear-heading">${mode === "tasks" ? "Очистить задачи?" : "Сбросить данные?"}</h2><p id="clear-description">${mode === "tasks" ? "Все задачи, архив, история и напоминания будут удалены." : "Все задачи, архив, история, напоминания и таймеры будут удалены."} Отменить действие нельзя. Настройки и существующие резервные копии сохранятся. Новая копия не создаётся.</p><p role="alert" data-clear-error></p><div class="reminder-actions"><button type="button" data-clear-cancel autofocus>Отмена</button><button type="submit" class="danger-action">${mode === "tasks" ? "Очистить задачи" : "Сбросить данные"}</button></div></form>`;
+  const close = (): void => { if (clearingData) return; dialog.close(); dialog.remove(); trigger.focus({ preventScroll: true }); };
+  dialog.querySelector("[data-clear-cancel]")!.addEventListener("click", close);
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
+  dialog.querySelector("form")!.addEventListener("submit", async (event) => {
+    event.preventDefault(); if (clearingData) return;
+    clearingData = true;
+    dialog.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    try {
+      await invoke("clear_user_data", { mode });
+      clearingData = false; close();
+    } catch (error) {
+      clearingData = false;
+      dialog.querySelector<HTMLElement>("[data-clear-error]")!.textContent = backendMessage(error);
+      dialog.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+    }
+  });
+  document.body.append(dialog); dialog.showModal();
+}
+
 function renderSettings(): void {
   const previousScrollTop = root.querySelector<HTMLElement>(".settings-view")?.scrollTop ?? 0;
   root.innerHTML = `<div class="app-shell">${renderSidebar()}
@@ -763,7 +792,7 @@ function renderSettings(): void {
       }).join("")}</div>
     </section>
     ${renderBackupSettings()}
-    <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p></section>
+    <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p><div class="settings-actions"><button type="button" class="danger-action" data-clear-data="tasks" ${loadFailed ? "disabled" : ""}>Очистить задачи</button><button type="button" class="danger-action" data-clear-data="allData" ${loadFailed ? "disabled" : ""}>Сбросить данные</button></div></section>
     <section class="settings-section"><h2>Диагностика</h2><p>Журналы находятся в папке данных → logs. Хранятся четыре файла до 256 КБ каждый, без названий задач и таймеров.</p><p role="alert" data-diagnostics-warning></p></section>
     <section class="settings-section"><h2>О приложении</h2><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
   </main></div>`;
@@ -815,6 +844,7 @@ function renderSettings(): void {
     try { localStorage.setItem(themeStorageKey, value); theme = value; applyTheme(); }
     catch { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = "Не удалось сохранить тему. Повторите попытку."; }
   });
+  root.querySelectorAll<HTMLButtonElement>("[data-clear-data]").forEach((button) => button.addEventListener("click", () => openClearData(button.dataset.clearData as ClearMode, button)));
   const settingsPage = root.querySelector<HTMLElement>(".settings-view");
   if (settingsPage) settingsPage.scrollTop = previousScrollTop;
   void refreshDiagnosticsWarning();
@@ -1673,6 +1703,13 @@ async function loadShortcuts(): Promise<void> {
   catch (error) { shortcutsReady = false; shortcutsError = backendMessage(error); }
   if (getCurrentWindow().label !== "overlay" && activeView === "settings") render(true);
 }
+void listen<ClearMode>("data-cleared", ({ payload }) => {
+  tasks = []; deletionUndos = []; editingTaskId = null; reminderEditingTaskId = null;
+  highlightedReminderTaskId = null; pendingTaskFocusId = null;
+  enteringTaskIds.clear(); taskAnimationLocks.clear();
+  if (payload === "allData") { timers = []; timerSnapshots.clear(); fullscreenTimerId = null; timerDialogOpen = false; }
+  if (getCurrentWindow().label !== "overlay") { render(true); void refreshTasks(); void refreshHistory(); if (payload === "allData") void refreshTimers(); }
+});
 void loadShortcuts();
 void listen<typeof shortcuts>("shortcuts-changed", ({ payload }) => { shortcuts = payload; shortcutsReady = true; });
 

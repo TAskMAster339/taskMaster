@@ -3,7 +3,13 @@ use crate::{
     tasks::{ReminderState, Task, TaskStatus, TaskStore, compact_active_positions, record_event},
 };
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClearMode {
+    Tasks,
+    AllData,
+}
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoDeletion {
@@ -80,6 +86,23 @@ fn reminder_name(state: Option<ReminderState>) -> Option<&'static str> {
 }
 
 impl TaskStore {
+    pub fn clear_data(&self, mode: ClearMode) -> Result<(), AppError> {
+        let mut clocks = self.timer_clocks.lock().map_err(|_| AppError::lock())?;
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        tx.execute_batch("DELETE FROM focus_sessions; DELETE FROM task_events; DELETE FROM deletion_undos; DELETE FROM tasks;").map_err(|_| AppError::storage())?;
+        if matches!(mode, ClearMode::AllData) {
+            tx.execute("DELETE FROM timers", [])
+                .map_err(|_| AppError::storage())?;
+        }
+        tx.commit().map_err(|_| AppError::storage())?;
+        if matches!(mode, ClearMode::AllData) {
+            clocks.clear();
+        }
+        Ok(())
+    }
     pub fn prepare_permanent_deletion(&self, id: &str) -> Result<PurgeSummary, AppError> {
         purge_summary(&self.connection, id)
     }
@@ -282,6 +305,72 @@ impl TaskStore {
 mod tests {
     use super::*;
     use crate::tasks::TaskStatus;
+    #[test]
+    fn clear_data_preserves_settings_and_optional_timers() {
+        for mode in [ClearMode::Tasks, ClearMode::AllData] {
+            let store = TaskStore::in_memory().unwrap();
+            let task = store.create_task("Task").unwrap();
+            store.delete_task_at(&task.id, task.created_at).unwrap();
+            store.create_timer("Timer", 60, 1000).unwrap();
+            store.set_preferences(30, 48).unwrap();
+            let shortcuts = store.shortcuts().unwrap();
+            store.clear_data(mode).unwrap();
+            store.clear_data(mode).unwrap();
+            for table in ["tasks", "task_events", "deletion_undos", "focus_sessions"] {
+                assert_eq!(
+                    store
+                        .connection
+                        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                            .get::<_, i64>(0))
+                        .unwrap(),
+                    0
+                );
+            }
+            assert_eq!(
+                store.list_timers_at(1000).unwrap().len(),
+                if matches!(mode, ClearMode::Tasks) {
+                    1
+                } else {
+                    0
+                }
+            );
+            assert_eq!(store.preferences().unwrap().reminder_minutes, 30);
+            assert_eq!(store.shortcuts().unwrap(), shortcuts);
+        }
+    }
+    #[test]
+    fn clear_data_rolls_back_on_failure() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Keep").unwrap();
+        store.delete_task_at(&task.id, task.created_at).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER reject_clear BEFORE DELETE ON tasks BEGIN SELECT RAISE(ABORT, 'blocked'); END;").unwrap();
+        let before = store.export_data().unwrap();
+        assert!(store.clear_data(ClearMode::AllData).is_err());
+        assert_eq!(store.export_data().unwrap(), before);
+        assert_eq!(store.list_deletion_undos(task.created_at).unwrap().len(), 1);
+    }
+    #[test]
+    fn clear_data_keeps_backup_restorable() {
+        for mode in [ClearMode::Tasks, ClearMode::AllData] {
+            let directory = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+            std::fs::create_dir_all(&directory).unwrap();
+            let mut store = TaskStore::open(directory.join("live.sqlite3")).unwrap();
+            store.create_task("Recover").unwrap();
+            store.create_timer("Recover timer", 60, 1000).unwrap();
+            let backup = directory.join("manual.sqlite3");
+            crate::storage::snapshot(&store.connection, &backup).unwrap();
+            let bytes = std::fs::read(&backup).unwrap();
+            store.clear_data(mode).unwrap();
+            assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+            let prepared = crate::storage::prepare(&backup, &directory).unwrap();
+            crate::storage::restore_live(&mut store, &prepared, &directory).unwrap();
+            assert_eq!(store.list_tasks().unwrap().len(), 1);
+            assert_eq!(store.list_timers_at(1000).unwrap().len(), 1);
+            drop(prepared);
+            drop(store);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
     #[test]
     fn permanent_deletion_removes_only_the_confirmed_task_and_its_history() {
         let store = TaskStore::in_memory().unwrap();
