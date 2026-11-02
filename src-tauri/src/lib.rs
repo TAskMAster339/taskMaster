@@ -143,6 +143,67 @@ fn with_store<T>(
 }
 
 #[tauri::command]
+fn get_preferences(state: State<'_, AppState>) -> Result<tasks::Preferences, AppError> {
+    with_store(&state, TaskStore::preferences)
+}
+#[tauri::command]
+fn update_preferences(
+    reminder_minutes: i64,
+    archive_hours: i64,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    with_store(&state, |store| {
+        store.set_preferences(reminder_minutes, archive_hours)
+    })
+}
+
+#[tauri::command]
+fn export_user_data(
+    theme: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    overlay: State<'_, OverlayState>,
+) -> Result<String, AppError> {
+    use std::io::Write;
+    if !["system", "dark", "light"].contains(&theme.as_str()) {
+        return Err(AppError::invalid_state());
+    }
+    let data = with_store(&state, TaskStore::export_data)?;
+    let overlay = overlay
+        .settings
+        .lock()
+        .map_err(|_| AppError::lock())?
+        .clone();
+    let document = serde_json::json!({ "format": "taskmaster", "formatVersion": 1, "appVersion": env!("CARGO_PKG_VERSION"), "exportedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64, "data": data, "settings": { "theme": theme, "overlay": overlay } });
+    let path = app
+        .path()
+        .download_dir()
+        .map_err(|_| AppError::storage())?
+        .join(format!("taskMaster-{}.json", uuid::Uuid::new_v4()));
+    let bytes = serde_json::to_vec_pretty(&document).map_err(|_| AppError::storage())?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|_| AppError {
+            code: "export_error",
+            message: "Не удалось создать JSON в папке загрузок.".into(),
+        })?;
+    if file
+        .write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        let _ = fs::remove_file(&path);
+        return Err(AppError {
+            code: "export_error",
+            message: "Не удалось записать JSON. Проверьте свободное место и права доступа.".into(),
+        });
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, AppError> {
     with_store(&state, TaskStore::list_tasks)
 }
@@ -426,6 +487,10 @@ fn clamp_overlay_position(app: &AppHandle, x: i32, y: i32) -> (i32, i32) {
     (24, 24)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Monitor and window rectangles use explicit physical coordinates"
+)]
 fn clamp_to_monitor(
     x: i32,
     y: i32,
@@ -520,12 +585,12 @@ fn set_overlay_pinned(
         state.settings.lock().map_err(|_| AppError::lock())?.pinned = previous;
         return Err(AppError::storage());
     }
-    if let Some(window) = app.get_webview_window("overlay") {
-        if window.set_always_on_top(pinned).is_err() {
-            state.settings.lock().map_err(|_| AppError::lock())?.pinned = previous;
-            let _ = save_overlay_settings(&state);
-            return Err(AppError::storage());
-        }
+    if let Some(window) = app.get_webview_window("overlay")
+        && window.set_always_on_top(pinned).is_err()
+    {
+        state.settings.lock().map_err(|_| AppError::lock())?.pinned = previous;
+        let _ = save_overlay_settings(&state);
+        return Err(AppError::storage());
     }
     Ok(())
 }
@@ -778,22 +843,24 @@ pub fn run() {
                 .map_err(|_| std::io::Error::other("overlay window could not be created"))?;
             let overlay_handle = app.handle().clone();
             overlay_window.on_window_event(move |event| {
-                if let WindowEvent::Moved(position) = event {
-                    if let Some(state) = overlay_handle.try_state::<OverlayState>() {
-                        if let Ok(mut settings) = state.settings.lock() {
-                            settings.x = position.x;
-                            settings.y = position.y;
-                            drop(settings);
-                            if save_overlay_settings(&state).is_err() {
-                                let _ = overlay_handle.emit("overlay-settings-error", ());
-                            }
-                        }
+                if let WindowEvent::Moved(position) = event
+                    && let Some(state) = overlay_handle.try_state::<OverlayState>()
+                    && let Ok(mut settings) = state.settings.lock()
+                {
+                    settings.x = position.x;
+                    settings.y = position.y;
+                    drop(settings);
+                    if save_overlay_settings(&state).is_err() {
+                        let _ = overlay_handle.emit("overlay-settings-error", ());
                     }
                 }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_preferences,
+            update_preferences,
+            export_user_data,
             list_tasks,
             create_task,
             rename_task,

@@ -95,6 +95,13 @@ pub struct Timer {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Preferences {
+    pub reminder_minutes: i64,
+    pub archive_hours: i64,
+}
+
 pub const MAX_TIMER_SECONDS: i64 = 359_999;
 
 pub struct TaskStore {
@@ -116,7 +123,7 @@ impl TaskStore {
     fn from_connection(connection: Connection) -> rusqlite::Result<Self> {
         let schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !(0..=5).contains(&schema_version) {
+        if !(0..=6).contains(&schema_version) {
             return Err(rusqlite::Error::InvalidQuery);
         }
 
@@ -227,10 +234,94 @@ impl TaskStore {
             )?;
             transaction.commit()?;
         }
+        if schema_version < 6 {
+            let tx = connection.unchecked_transaction()?;
+            tx.execute_batch("CREATE TABLE preferences (id INTEGER PRIMARY KEY CHECK(id=1), reminder_minutes INTEGER NOT NULL CHECK(reminder_minutes BETWEEN 1 AND 1439), archive_hours INTEGER NOT NULL CHECK(archive_hours BETWEEN 1 AND 8760)); INSERT INTO preferences VALUES(1,15,24); PRAGMA user_version=6;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection,
             timer_clocks: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn preferences(&self) -> Result<Preferences, AppError> {
+        self.connection
+            .query_row(
+                "SELECT reminder_minutes,archive_hours FROM preferences WHERE id=1",
+                [],
+                |row| {
+                    Ok(Preferences {
+                        reminder_minutes: row.get(0)?,
+                        archive_hours: row.get(1)?,
+                    })
+                },
+            )
+            .map_err(|_| AppError::storage())
+    }
+    pub fn set_preferences(
+        &self,
+        reminder_minutes: i64,
+        archive_hours: i64,
+    ) -> Result<(), AppError> {
+        if !(1..=1439).contains(&reminder_minutes) || !(1..=8760).contains(&archive_hours) {
+            return Err(AppError { code: "invalid_preferences", message: "Укажите целые значения: напоминание от 1 до 1439 минут, архивация от 1 до 8760 часов.".into() });
+        }
+        self.connection
+            .execute(
+                "UPDATE preferences SET reminder_minutes=?1,archive_hours=?2 WHERE id=1",
+                params![reminder_minutes, archive_hours],
+            )
+            .map_err(|_| AppError::storage())?;
+        Ok(())
+    }
+
+    pub fn export_data(&self) -> Result<serde_json::Value, AppError> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        let mut data = serde_json::Map::new();
+        for table in [
+            "tasks",
+            "task_events",
+            "focus_sessions",
+            "timers",
+            "preferences",
+        ] {
+            let mut stmt = tx
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .map_err(|_| AppError::storage())?;
+            let names: Vec<String> = stmt
+                .column_names()
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect();
+            let rows = stmt
+                .query_map([], |row| {
+                    let mut object = serde_json::Map::new();
+                    for (index, name) in names.iter().enumerate() {
+                        use rusqlite::types::ValueRef;
+                        let value = match row.get_ref(index)? {
+                            ValueRef::Null => serde_json::Value::Null,
+                            ValueRef::Integer(value) => serde_json::json!(value),
+                            ValueRef::Real(value) => serde_json::json!(value),
+                            ValueRef::Text(value) => serde_json::Value::String(
+                                String::from_utf8_lossy(value).into_owned(),
+                            ),
+                            ValueRef::Blob(value) => serde_json::json!(value),
+                        };
+                        object.insert(name.clone(), value);
+                    }
+                    Ok(serde_json::Value::Object(object))
+                })
+                .map_err(|_| AppError::storage())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|_| AppError::storage())?;
+            data.insert(table.into(), serde_json::json!(rows));
+        }
+        tx.commit().map_err(|_| AppError::storage())?;
+        Ok(serde_json::Value::Object(data))
     }
 
     pub fn create_timer(
@@ -1000,8 +1091,8 @@ impl TaskStore {
     }
 
     pub fn archive_expired_tasks(&self, now: i64) -> Result<usize, AppError> {
-        const RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
-        let cutoff = now.saturating_sub(RETENTION_MS);
+        let retention_ms = self.preferences()?.archive_hours * 60 * 60 * 1000;
+        let cutoff = now.saturating_sub(retention_ms);
         let transaction = self
             .connection
             .unchecked_transaction()

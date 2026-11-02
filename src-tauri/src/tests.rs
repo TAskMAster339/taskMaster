@@ -407,7 +407,7 @@ fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     assert_eq!(violations, 0);
 }
 
@@ -490,7 +490,7 @@ fn migration_preserves_legacy_focus_history_without_blocking_task_completion() {
         let connection = Connection::open(&database.0).unwrap();
         connection.execute("INSERT INTO focus_sessions(id,task_id,duration_seconds,started_at,running_since,status) VALUES('legacy-session',?1,60,1000,1000,'active')", [&task_id]).unwrap();
         connection
-            .execute_batch("DROP INDEX timers_created; DROP TABLE timers; PRAGMA user_version=4;")
+            .execute_batch("DROP INDEX timers_created; DROP TABLE timers; DROP TABLE preferences; PRAGMA user_version=4;")
             .unwrap();
     }
 
@@ -587,4 +587,46 @@ fn lists_creation_times_in_a_half_open_calendar_range() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn export_includes_archived_tasks_events_and_legacy_sessions() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Экспорт").unwrap();
+    store.set_created_at(&task.id, 1000).unwrap();
+    store.archive_expired_tasks(1000 + 86_400_000).unwrap();
+    store.create_timer("Чай", 60, 1000).unwrap();
+    let data = store.export_data().unwrap();
+    assert_eq!(data["tasks"][0]["status"], "archived");
+    assert_eq!(data["task_events"].as_array().unwrap().len(), 2);
+    assert_eq!(data["timers"][0]["name"], "Чай");
+    assert!(data["focus_sessions"].is_array());
+}
+
+#[test]
+fn preferences_persist_validate_and_control_archive_boundary() {
+    let db = TemporaryDatabase::new();
+    let id;
+    {
+        let store = TaskStore::open(&db.0).unwrap();
+        assert_eq!(store.preferences().unwrap().reminder_minutes, 15);
+        assert_eq!(store.preferences().unwrap().archive_hours, 24);
+        store.set_preferences(30, 2).unwrap();
+        assert_eq!(store.preferences().unwrap().reminder_minutes, 30);
+        for (minutes, hours) in [(0, 2), (1440, 2), (30, 0), (30, 8761)] {
+            assert!(store.set_preferences(minutes, hours).is_err());
+        }
+        let task = store.create_task("Срок").unwrap();
+        id = task.id;
+        store.set_created_at(&id, 1000).unwrap();
+    }
+    let store = TaskStore::open(&db.0).unwrap();
+    assert_eq!(store.preferences().unwrap().archive_hours, 2);
+    assert_eq!(
+        store.archive_expired_tasks(1000 + 7_200_000 - 1).unwrap(),
+        0
+    );
+    assert_eq!(store.archive_expired_tasks(1000 + 7_200_000).unwrap(), 1);
+    assert_eq!(store.archive_expired_tasks(1000 + 7_200_001).unwrap(), 0);
+    assert_eq!(store.list_tasks().unwrap()[0].id, id);
 }

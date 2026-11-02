@@ -76,6 +76,9 @@ let timerAnimationFrame: number | null = null;
 let timerDialogOpen = false;
 let timerError = "";
 let fullscreenTimerId: string | null = null;
+let preferences = { reminderMinutes: 15, archiveHours: 24 };
+let preferencesReady = false;
+let preferencesError = "";
 let overlayShortcut = "Ctrl+Alt+Space";
 let overlayShortcutAvailable = true;
 let overlayShortcutDialogOpen = false;
@@ -94,7 +97,7 @@ function defaultReminderTimeValue(now = new Date()): string {
   const reminderDate = new Date(now);
   const needsNextMinute = now.getSeconds() > 0 || now.getMilliseconds() > 0;
   reminderDate.setSeconds(0, 0);
-  reminderDate.setMinutes(reminderDate.getMinutes() + 15 + Number(needsNextMinute));
+  reminderDate.setMinutes(reminderDate.getMinutes() + preferences.reminderMinutes + Number(needsNextMinute));
   if (reminderDate.getFullYear() !== now.getFullYear()
     || reminderDate.getMonth() !== now.getMonth()
     || reminderDate.getDate() !== now.getDate()) return "";
@@ -488,8 +491,31 @@ function renderSettings(): void {
     <section class="settings-section" aria-labelledby="theme-heading"><h2 id="theme-heading">Оформление</h2><label for="settings-theme">Тема</label>
     <select id="settings-theme" data-theme-select>${themeOrder.map((value) => `<option value="${value}" ${theme === value ? "selected" : ""}>${themeLabels[value]}</option>`).join("")}</select>
     <p role="alert" data-settings-error></p></section>
+    <section class="settings-section"><h2>Задачи</h2><form data-preferences-form>
+      <label for="reminder-minutes">Время до напоминания, минуты</label><input id="reminder-minutes" name="reminderMinutes" type="number" min="1" max="1439" step="1" required value="${preferences.reminderMinutes}" ${preferencesReady ? "" : "disabled"}/>
+      <label for="archive-hours">Архивировать через, часы</label><input id="archive-hours" name="archiveHours" type="number" min="1" max="8760" step="1" required value="${preferences.archiveHours}" ${preferencesReady ? "" : "disabled"}/>
+      <p>Срок отсчитывается от создания задачи. Архив сохраняет задачи и историю.</p>
+      <button class="retry-button" type="submit" ${preferencesReady ? "" : "disabled"}>Сохранить</button><p role="status" data-preferences-status>${escapeHtml(preferencesError)}</p>
+    </form></section>
+    <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p></section>
   </main></div>`;
   bindEvents();
+  root.querySelector<HTMLFormElement>("[data-preferences-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault(); const form = event.currentTarget as HTMLFormElement;
+    const values = new FormData(form); const next = { reminderMinutes: Number(values.get("reminderMinutes")), archiveHours: Number(values.get("archiveHours")) };
+    const button = form.querySelector<HTMLButtonElement>("button")!; button.disabled = true;
+    const status = form.querySelector<HTMLElement>("[data-preferences-status]")!;
+    try { await invoke("update_preferences", next); preferences = next; status.textContent = "Сохранено"; }
+    catch (error) { status.textContent = backendMessage(error); }
+    finally { button.disabled = false; }
+  });
+  root.querySelector<HTMLButtonElement>("[data-export-json]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement; button.disabled = true;
+    const status = root.querySelector<HTMLElement>("[data-export-status]")!;
+    try { const path = await invoke<string>("export_user_data", { theme }); status.textContent = `Сохранено: ${path}`; }
+    catch (error) { status.textContent = backendMessage(error); }
+    finally { button.disabled = false; }
+  });
   root.querySelector<HTMLSelectElement>("[data-theme-select]")?.addEventListener("change", (event) => {
     const value = (event.target as HTMLSelectElement).value as Theme;
     try { localStorage.setItem(themeStorageKey, value); theme = value; applyTheme(); }
@@ -740,7 +766,9 @@ function bindEvents(): void {
     render(true);
   }));
   root.querySelector<HTMLButtonElement>("[data-exit-fullscreen]")?.addEventListener("click", () => { fullscreenTimerId = null; render(true); });
-  root.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", () => {
+  root.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", async () => {
+    try { preferences = await invoke<typeof preferences>("get_preferences"); preferencesReady = true; }
+    catch (error) { errorMessage = backendMessage(error); render(true); return; }
     reminderEditingTaskId = button.dataset.editReminder ?? null;
     reminderDialogError = "";
     render(true);
@@ -1378,6 +1406,7 @@ void listen("reminder-runtime-error", () => {
   errorMessage = "Не удалось обработать напоминание. Перезапустите приложение.";
   render(true);
 });
+void invoke<typeof preferences>("get_preferences").then((value) => { preferences = value; preferencesReady = true; if (activeView === "settings") render(true); }).catch((error) => { preferencesError = backendMessage(error); if (activeView === "settings") render(true); });
 render();
 void refreshTasks();
 if (activeView === "history") void refreshHistory();

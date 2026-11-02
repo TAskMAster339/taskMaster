@@ -378,3 +378,6 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .settings-section h2 { margin: 0 0 24px; font: 600 22px/1.2 "Oswald", sans-serif; }
 .settings-section label { display: block; margin-bottom: 8px; }
 .settings-section select { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--surface); color: var(--text); font: inherit; }
+
+.settings-section input { width: 100%; min-height: 44px; margin-bottom: 20px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--surface); color: var(--text); font: inherit; }
+.settings-section p { overflow-wrap: anywhere; }
