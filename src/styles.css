@@ -103,7 +103,7 @@ body.overlay-mode #app { width: 100%; height: 100%; display: flex; flex-directio
 .overlay-failed strong { font: 600 18px/1.1 "Oswald", sans-serif; text-transform: uppercase; }
 .overlay-failed p { margin: 0; font-size: 11px; }
 .overlay-timer-area { min-width: 0; width: 100%; flex: 0 0 auto; padding: 8px 0 12px; overflow-x: auto; overflow-y: hidden; background: transparent; scrollbar-color: var(--obi) transparent; scrollbar-width: thin; }
-.overlay-timer-grid { width: max-content; display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--overlay-rows, 2), 360px); grid-auto-columns: 360px; gap: 12px; }
+.overlay-timer-grid { position: relative; width: max-content; display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--overlay-rows, 2), 360px); grid-auto-columns: 360px; gap: 12px; }
 .overlay-mode .timer-card-overlay { width: 360px; height: 360px; min-height: 360px; aspect-ratio: 1; flex: 0 0 360px; grid-template-rows: auto minmax(0, 1fr) auto; padding: 14px; border: 1px solid var(--line-strong); background-color: var(--surface); background-image: var(--page-texture); background-size: 600px 600px; background-blend-mode: var(--page-blend); }
 .timer-card-overlay .timer-clock { font-size: 32px; }
 .timer-card-overlay .timer-controls button { min-width: 44px; min-height: 44px; }
@@ -359,3 +359,9 @@ body.is-task-dragging { user-select: none; cursor: grabbing; }
 :root[data-theme="dark"] .empty-state strong { color: var(--paper); }
 :root[data-theme="dark"] .retry-button { color: var(--paper); background: var(--ink); }
 :root[data-theme="dark"] .sidebar :focus-visible { outline-color: var(--paper); }
+
+.overlay-mode .timer-card-overlay { cursor: grab; touch-action: none; }
+.overlay-mode .timer-card-overlay:focus-visible { outline: 3px solid var(--focus); outline-offset: -4px; }
+.overlay-mode .timer-card-overlay.is-timer-drag-source { opacity: .22; outline: 2px dashed var(--obi); outline-offset: -3px; }
+body .overlay-timer-drag-preview { position: fixed; z-index: 10000; width: 360px; height: 360px; min-height: 360px; margin: 0; opacity: .9; pointer-events: none; border-color: var(--obi); background-color: var(--surface); background-image: var(--page-texture); background-size: 600px 600px; background-blend-mode: var(--page-blend); }
+.is-overlay-timer-dragging, .is-overlay-timer-dragging * { cursor: grabbing !important; user-select: none; }

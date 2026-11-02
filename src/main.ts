@@ -1019,6 +1019,113 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
   render();
 }
 
+function bindOverlayTimerDrag(card: HTMLElement, reorder: (ids: string[]) => void, setDragging: (value: boolean) => void): void {
+  card.tabIndex = 0;
+  card.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
+  card.onkeydown = (event) => {
+    if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const grid = card.parentElement!;
+    const cards = [...grid.querySelectorAll<HTMLElement>("[data-timer-card]")].sort((a, b) => Number(a.style.order) - Number(b.style.order));
+    const index = cards.indexOf(card);
+    const target = index + (event.key === "ArrowUp" ? -1 : 1);
+    if (target < 0 || target >= cards.length) return;
+    [cards[index], cards[target]] = [cards[target], cards[index]];
+    cards.forEach((item, position) => { item.style.order = String(position); });
+    reorder(cards.map((item) => item.dataset.timerCard!));
+  };
+  card.onpointerdown = (event) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button") || card.classList.contains("is-evaporating")) return;
+    const grid = card.parentElement!;
+    const area = grid.parentElement!;
+    const cards = [...grid.querySelectorAll<HTMLElement>("[data-timer-card]")].sort((a, b) => Number(a.style.order) - Number(b.style.order));
+    const original = cards.map((item) => item.dataset.timerCard!);
+    const bounds = card.getBoundingClientRect();
+    const offsetX = event.clientX - bounds.left;
+    const offsetY = event.clientY - bounds.top;
+    let x = event.clientX, y = event.clientY;
+    let preview: HTMLElement | null = null;
+    let frame = 0;
+    const animations = new Map<HTMLElement, Animation>();
+    const positionCards = (ordered: HTMLElement[]): void => {
+      const before = new Map(cards.map((item) => [item, item.getBoundingClientRect()]));
+      for (const animation of animations.values()) animation.cancel();
+      ordered.forEach((item, index) => { item.style.order = String(index); });
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        for (const item of cards) {
+          if (item === card) continue;
+          const old = before.get(item)!;
+          const next = item.getBoundingClientRect();
+          animations.set(item, item.animate([{ transform: `translate(${old.left - next.left}px, ${old.top - next.top}px)` }, { transform: "translate(0, 0)" }], { duration: 200, easing: "ease-out" }));
+        }
+      }
+    };
+    const tick = (): void => {
+      if (!preview) return;
+      preview.style.left = `${Math.max(0, Math.min(window.innerWidth - bounds.width, x - offsetX))}px`;
+      preview.style.top = `${Math.max(0, Math.min(window.innerHeight - bounds.height, y - offsetY))}px`;
+      const areaBounds = area.getBoundingClientRect();
+      if (x > areaBounds.right - 40) area.scrollLeft += 12;
+      else if (x < areaBounds.left + 40) area.scrollLeft -= 12;
+      const ordered = [...cards].sort((a, b) => Number(a.style.order) - Number(b.style.order));
+      let nearest = card, distance = Infinity;
+      for (const item of cards) {
+        const gridBounds = grid.getBoundingClientRect();
+        const d = Math.hypot(x - (gridBounds.left + item.offsetLeft + item.offsetWidth / 2), y - (gridBounds.top + item.offsetTop + item.offsetHeight / 2));
+        if (d < distance) { nearest = item; distance = d; }
+      }
+      if (nearest !== card) {
+        const index = ordered.indexOf(nearest);
+        ordered.splice(ordered.indexOf(card), 1);
+        ordered.splice(index, 0, card);
+        positionCards(ordered);
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    const hold = window.setTimeout(() => {
+      setDragging(true);
+      card.setPointerCapture(event.pointerId);
+      preview = card.cloneNode(true) as HTMLElement;
+      preview.removeAttribute("data-timer-card");
+      preview.removeAttribute("tabindex");
+      preview.setAttribute("aria-hidden", "true");
+      preview.classList.remove("is-entering");
+      preview.classList.add("overlay-timer-drag-preview");
+      document.body.append(preview);
+      card.classList.add("is-timer-drag-source");
+      document.body.classList.add("is-overlay-timer-dragging");
+      tick();
+    }, 180);
+    const finish = (cancelled = false): void => {
+      window.clearTimeout(hold);
+      cancelAnimationFrame(frame);
+      if (preview) {
+        if (cancelled) positionCards(original.map((id) => cards.find((item) => item.dataset.timerCard === id)!));
+        else reorder([...cards].sort((a, b) => Number(a.style.order) - Number(b.style.order)).map((item) => item.dataset.timerCard!));
+        preview.remove();
+        card.classList.remove("is-timer-drag-source");
+        document.body.classList.remove("is-overlay-timer-dragging");
+        setDragging(false);
+      }
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("keydown", escape);
+      if (card.hasPointerCapture(event.pointerId)) card.releasePointerCapture(event.pointerId);
+    };
+    const move = (moveEvent: PointerEvent): void => { x = moveEvent.clientX; y = moveEvent.clientY; if (preview) moveEvent.preventDefault(); };
+    const up = (): void => finish();
+    const cancel = (): void => finish(true);
+    const escape = (key: KeyboardEvent): void => { if (key.key === "Escape") finish(true); };
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", escape);
+  };
+}
+
 async function renderOverlay(): Promise<void> {
   const overlayRoot = root;
   let overlayError = "";
@@ -1028,11 +1135,12 @@ async function renderOverlay(): Promise<void> {
   const hiddenTimerIds = new Set<string>();
   let lastTimerCount = -1;
   let loadingOverlay = false;
+  let draggingOverlayTimer = false;
   let shownTaskId: string | null = null;
   const enteringTimerIds = new Set<string>();
   const endingTimers = new Map<string, Timer>();
   const load = async (): Promise<void> => {
-    if (loadingOverlay) return;
+    if (loadingOverlay || draggingOverlayTimer) return;
     loadingOverlay = true;
     try {
       const active = (await invoke<Task[]>("list_tasks")).filter((task) => task.status === "active").sort((a, b) => a.position - b.position);
@@ -1128,6 +1236,17 @@ async function renderOverlay(): Promise<void> {
           }
         } else grid?.append(next);
       }
+      displayTimers.forEach((timer, index) => {
+        const card = overlayRoot.querySelector<HTMLElement>(`[data-timer-card="${CSS.escape(timer.id)}"]`);
+        if (!card) return;
+        card.style.order = String(index);
+        bindOverlayTimerDrag(card, (ids) => {
+          const remaining = [...visibleTimerIds].filter((id) => !ids.includes(id));
+          visibleTimerIds.clear();
+          [...ids, ...remaining].forEach((id) => visibleTimerIds.add(id));
+          lastRenderKey = "";
+        }, (value) => { draggingOverlayTimer = value; if (!value) void load(); });
+      });
       if (!displayTimers.length) overlayRoot.querySelector(".overlay-timer-area")?.remove();
       if (taskChanged) overlayRoot.querySelector<HTMLElement>(".overlay-task, .overlay-empty")?.animate([{ opacity: 0, transform: "translateX(32px)" }, { opacity: 1, transform: "translateX(0)" }], { duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280, easing: "ease-out" });
       overlayRoot.querySelectorAll<HTMLButtonElement>("[data-hide-overlay-timer]").forEach((button) => { button.onclick = () => {
