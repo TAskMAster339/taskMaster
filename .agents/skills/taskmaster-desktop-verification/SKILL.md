@@ -18,4 +18,4 @@ Use this workflow to select and report checks that match the changed behavior.
 8. After every completed feature, add a concise user-visible entry to `CHANGELOG.md` under `Unreleased` (`Добавлено`, `Изменено`, or `Исправлено`). Include the changelog in that feature's commit. Skip entries for documentation-only process edits that do not change project behavior or contributor workflow.
 9. Before a manual GitHub release, verify the release checks succeeded and `Unreleased` contains release notes. The release workflow publishes the Windows executable to a dated/versioned release and updates the rolling `latest` release. Only after both publications succeed, prepare a PR that moves those notes into a version/date section in `CHANGELOG.md` and leaves an empty `Unreleased` section. Merge that PR before the next release. Preserve all older release sections; never clear the whole changelog. If release publication fails, do not archive or clear `Unreleased`.
 
-Consult `ТЗ.md` for the acceptance scenarios and current platform limits.
+Consult `README.md` for the acceptance scenarios and current platform limits.
