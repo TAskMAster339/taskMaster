@@ -381,3 +381,16 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 
 .settings-section input { width: 100%; min-height: 44px; margin-bottom: 20px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--surface); color: var(--text); font: inherit; }
 .settings-section p { overflow-wrap: anywhere; }
+
+/* Shared paper/obi scrollbars, including settings and timer lists. */
+:where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area) {
+  scrollbar-color: var(--obi) var(--surface-soft);
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+:where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area)::-webkit-scrollbar { width: 10px; height: 10px; }
+:where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area)::-webkit-scrollbar-track { background: var(--surface-soft); }
+:where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area)::-webkit-scrollbar-thumb { background: var(--obi); border: 2px solid var(--surface-soft); border-radius: 0; }
+:where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area)::-webkit-scrollbar-thumb:hover { background: var(--riso); }
+:where(.settings-view, .timer-grid, .task-list, .history-task-list, .history-list-container, .overlay-timer-area)::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+:where(.settings-view, .timer-grid)::-webkit-scrollbar-corner { background: var(--surface-soft); }
