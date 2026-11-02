@@ -82,6 +82,11 @@ struct AppState {
     store: Mutex<Result<TaskStore, AppError>>,
 }
 
+#[tauri::command]
+fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 #[derive(Default)]
 struct PermanentDeletionState(Mutex<Option<(String, deletions::PurgeSummary)>>);
 
@@ -1117,10 +1122,12 @@ pub fn run() {
             register_notification_actions(app.handle());
 
             let show = MenuItemBuilder::with_id("show", "Показать").build(app)?;
+            let hide = MenuItemBuilder::with_id("hide", "Скрыть приложение").build(app)?;
             let overlay = MenuItemBuilder::with_id("overlay", "Оверлей").build(app)?;
+            let settings = MenuItemBuilder::with_id("settings", "Настройки").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Выход").build(app)?;
             let menu = MenuBuilder::new(app)
-                .items(&[&show, &overlay, &quit])
+                .items(&[&show, &hide, &overlay, &settings, &quit])
                 .build()?;
 
             TrayIconBuilder::new()
@@ -1133,6 +1140,15 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main_window(app),
+                    "hide" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
+                        }
+                    }
+                    "settings" => {
+                        show_main_window(app);
+                        let _ = app.emit("open-settings", ());
+                    }
                     "overlay" => {
                         let _ = toggle_overlay(app);
                     }
@@ -1181,6 +1197,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_app_version,
             notifications::get_notification_status,
             notifications::send_test_notification,
             notifications::open_notification_settings,

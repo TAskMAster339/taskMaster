@@ -58,6 +58,8 @@ const taskAnimationLocks = new Set<string>();
 const taskAnimationErrors: string[] = [];
 let announcement = "";
 let theme: Theme = readTheme();
+let appVersion = "";
+let appVersionError = "";
 type View = "today" | "completed" | "history" | "timers" | "settings";
 let activeView: View = window.location.hash === "#settings" ? "settings" : window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : window.location.hash === "#timers" ? "timers" : "today";
 let historyDay: HistoryDay = { completed: [], archived: [] };
@@ -751,6 +753,7 @@ function renderSettings(): void {
     </section>
     ${renderBackupSettings()}
     <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p></section>
+    <section class="settings-section"><h2>О приложении</h2><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
   </main></div>`;
   bindEvents();
   bindBackupSettings();
@@ -1681,6 +1684,14 @@ void listen("reminder-runtime-error", () => {
   render(true);
 });
 void refreshAutostart();
+void invoke<string>("get_app_version").then((value) => { appVersion = value; if (activeView === "settings") render(true); }).catch((error) => { appVersionError = backendMessage(error); if (activeView === "settings") render(true); });
+void listen("open-settings", () => {
+  activeView = "settings";
+  window.history.pushState(null, "", "#settings");
+  render(true);
+  void refreshAutostart();
+  void refreshNotificationStatus();
+});
 void refreshNotificationStatus();
 window.addEventListener("focus", () => { if (activeView === "settings") void refreshAutostart(); void refreshNotificationStatus(); });
 void refreshBackupStatus();
