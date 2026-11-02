@@ -11,6 +11,10 @@ use std::{
 };
 
 pub fn error(message: impl Into<String>) -> AppError {
+    crate::diagnostics::record(
+        crate::diagnostics::Event::BackupWarning,
+        Some("backup_error"),
+    );
     AppError {
         code: "backup_error",
         message: message.into(),

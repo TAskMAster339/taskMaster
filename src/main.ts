@@ -753,6 +753,7 @@ function renderSettings(): void {
     </section>
     ${renderBackupSettings()}
     <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p></section>
+    <section class="settings-section"><h2>Диагностика</h2><p>Журналы находятся в папке данных → logs. Хранятся четыре файла до 256 КБ каждый, без названий задач и таймеров.</p><p role="alert" data-diagnostics-warning></p></section>
     <section class="settings-section"><h2>О приложении</h2><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
   </main></div>`;
   bindEvents();
@@ -805,6 +806,15 @@ function renderSettings(): void {
   });
   const settingsPage = root.querySelector<HTMLElement>(".settings-view");
   if (settingsPage) settingsPage.scrollTop = previousScrollTop;
+  void refreshDiagnosticsWarning();
+}
+
+async function refreshDiagnosticsWarning(): Promise<void> {
+  let warning: string | null;
+  try { warning = await invoke<string | null>("get_diagnostics_warning"); }
+  catch (error) { warning = backendMessage(error); }
+  const status = root.querySelector<HTMLElement>("[data-diagnostics-warning]");
+  if (status) status.textContent = warning ?? "";
 }
 
 function renderTimers(): void {
@@ -1693,7 +1703,7 @@ void listen("open-settings", () => {
   void refreshNotificationStatus();
 });
 void refreshNotificationStatus();
-window.addEventListener("focus", () => { if (activeView === "settings") void refreshAutostart(); void refreshNotificationStatus(); });
+window.addEventListener("focus", () => { if (activeView === "settings") { void refreshAutostart(); void refreshDiagnosticsWarning(); } void refreshNotificationStatus(); });
 void refreshBackupStatus();
 void invoke<typeof preferences>("get_preferences").then((value) => { preferences = value; preferencesReady = true; if (activeView === "settings") render(true); }).catch((error) => { preferencesError = backendMessage(error); if (activeView === "settings") render(true); });
 render();

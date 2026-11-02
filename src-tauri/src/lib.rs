@@ -1,5 +1,6 @@
 mod deletions;
 mod desktop;
+mod diagnostics;
 mod notifications;
 mod shortcuts;
 mod storage;
@@ -64,6 +65,7 @@ impl AppError {
     }
 
     fn storage() -> Self {
+        diagnostics::record(diagnostics::Event::StorageError, Some("storage_error"));
         Self {
             code: "storage_error",
             message: "Не удалось открыть локальную базу данных.".into(),
@@ -368,7 +370,11 @@ fn with_store<T>(
 ) -> Result<T, AppError> {
     let guard: MutexGuard<'_, Result<TaskStore, AppError>> =
         state.store.lock().map_err(|_| AppError::lock())?;
-    action(guard.as_ref().map_err(Clone::clone)?)
+    let result = action(guard.as_ref().map_err(Clone::clone)?);
+    if let Err(error) = &result {
+        diagnostics::record(diagnostics::Event::CommandRejected, Some(error.code));
+    }
+    result
 }
 
 #[tauri::command]
@@ -639,6 +645,7 @@ fn notify_reminder(app: &AppHandle, reminder: DueReminder) {
             .map_err(|_| notifications::delivery_error())
     });
     if let Err(error) = result {
+        diagnostics::record(diagnostics::Event::NotificationError, Some(error.code));
         let _ = app.emit("reminder-delivery-error", error.message);
     }
 }
@@ -654,6 +661,7 @@ fn notify_timer_finished(app: &AppHandle, timer: Timer) {
             .map_err(|_| notifications::delivery_error())
     });
     if let Err(error) = result {
+        diagnostics::record(diagnostics::Event::NotificationError, Some(error.code));
         let _ = app.emit("timer-notification-error", error.message);
     }
     let _ = app.emit("timer-finished", timer);
@@ -699,11 +707,13 @@ fn start_reminder_scheduler(app: AppHandle) {
                 .is_err()
             {
                 let _ = app.emit("reminder-runtime-error", ());
+                diagnostics::record(diagnostics::Event::ReminderError, None);
                 continue;
             }
             let reminders = match store.take_due_reminders(now) {
                 Ok(reminders) => reminders,
                 Err(_) => {
+                    diagnostics::record(diagnostics::Event::ReminderError, None);
                     let _ = app.emit("reminder-runtime-error", ());
                     Vec::new()
                 }
@@ -711,6 +721,7 @@ fn start_reminder_scheduler(app: AppHandle) {
             let finished_timers = match store.take_due_timers() {
                 Ok(timers) => timers,
                 Err(_) => {
+                    diagnostics::record(diagnostics::Event::TimerError, None);
                     let _ = app.emit("timer-runtime-error", ());
                     Vec::new()
                 }
@@ -1055,6 +1066,7 @@ pub fn run() {
         }))
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
+            diagnostics::initialize(&directory.join("logs"));
             let store = open_store(directory.clone());
             let warning = match &store {
                 Ok(store) => {
@@ -1074,6 +1086,9 @@ pub fn run() {
                 }
             };
             app.manage(PermanentDeletionState::default());
+            if warning.is_some() {
+                diagnostics::record(diagnostics::Event::BackupWarning, None);
+            }
             app.manage(BackupState {
                 directory,
                 warning: Mutex::new(warning),
@@ -1113,6 +1128,7 @@ pub fn run() {
                 .map_err(|_| std::io::Error::other("overlay shortcut state lock failed"))? =
                 registered;
             if !registered {
+                diagnostics::record(diagnostics::Event::ShortcutConflict, None);
                 let _ = app.emit(
                     "overlay-shortcut-error",
                     format!("Не удалось зарегистрировать {shortcut}."),
@@ -1152,7 +1168,10 @@ pub fn run() {
                     "overlay" => {
                         let _ = toggle_overlay(app);
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        diagnostics::record(diagnostics::Event::AppStopped, None);
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1198,6 +1217,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            diagnostics::get_diagnostics_warning,
             notifications::get_notification_status,
             notifications::send_test_notification,
             notifications::open_notification_settings,
