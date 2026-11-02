@@ -407,7 +407,7 @@ fn migrates_version_one_tasks_and_keeps_their_event_foreign_keys() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     assert_eq!(violations, 0);
 }
 
@@ -490,7 +490,7 @@ fn migration_preserves_legacy_focus_history_without_blocking_task_completion() {
         let connection = Connection::open(&database.0).unwrap();
         connection.execute("INSERT INTO focus_sessions(id,task_id,duration_seconds,started_at,running_since,status) VALUES('legacy-session',?1,60,1000,1000,'active')", [&task_id]).unwrap();
         connection
-            .execute_batch("DROP INDEX timers_created; DROP TABLE timers; DROP TABLE preferences; DROP TABLE keyboard_shortcuts; PRAGMA user_version=4;")
+            .execute_batch("DROP INDEX timers_created; DROP TABLE timers; DROP TABLE preferences; DROP TABLE keyboard_shortcuts; DROP TABLE deletion_undos; PRAGMA user_version=4;")
             .unwrap();
     }
 

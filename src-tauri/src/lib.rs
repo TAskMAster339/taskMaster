@@ -1,3 +1,4 @@
+mod deletions;
 mod desktop;
 mod notifications;
 mod shortcuts;
@@ -404,6 +405,39 @@ fn export_user_data(
 #[tauri::command]
 fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, AppError> {
     with_store(&state, TaskStore::list_tasks)
+}
+
+#[tauri::command]
+fn delete_task(
+    id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<deletions::UndoDeletion, AppError> {
+    let undo = with_store(&state, |store| {
+        store.delete_task_at(&id, tasks::now_millis())
+    })?;
+    let _ = app.emit("tasks-changed", ());
+    Ok(undo)
+}
+#[tauri::command]
+fn undo_task_deletion(
+    token: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Task, AppError> {
+    let task = with_store(&state, |store| {
+        store.undo_task_deletion_at(&token, tasks::now_millis())
+    })?;
+    let _ = app.emit("tasks-changed", ());
+    Ok(task)
+}
+#[tauri::command]
+fn list_deletion_undos(
+    state: State<'_, AppState>,
+) -> Result<Vec<deletions::UndoDeletion>, AppError> {
+    with_store(&state, |store| {
+        store.list_deletion_undos(tasks::now_millis())
+    })
 }
 
 #[tauri::command]
@@ -1111,6 +1145,9 @@ pub fn run() {
             update_preferences,
             export_user_data,
             list_tasks,
+            delete_task,
+            undo_task_deletion,
+            list_deletion_undos,
             create_task,
             rename_task,
             reorder_tasks,

@@ -77,6 +77,41 @@ let timerAnimationFrame: number | null = null;
 let timerDialogOpen = false;
 let timerError = "";
 let fullscreenTimerId: string | null = null;
+interface UndoDeletion { token: string; taskId: string; title: string; expiresAt: number; }
+let deletionUndos: UndoDeletion[] = [];
+const undoBusy = new Set<string>();
+let undoMessage = "";
+let undoRenderKey = "";
+let undoExpiryTimer: number | null = null;
+function renderDeletionUndos(): void {
+  deletionUndos = deletionUndos.filter((item) => item.expiresAt > Date.now());
+  if (undoExpiryTimer !== null) window.clearTimeout(undoExpiryTimer);
+  undoExpiryTimer = deletionUndos.length ? window.setTimeout(renderDeletionUndos, Math.max(1, Math.min(...deletionUndos.map((item) => item.expiresAt)) - Date.now())) : null;
+  let region = document.querySelector<HTMLElement>("#deletion-undos");
+  if (!region) { region = document.createElement("aside"); region.id = "deletion-undos"; region.className = "undo-notices"; region.setAttribute("aria-label", "Удалённые задачи"); region.setAttribute("aria-live", "polite"); document.body.append(region); }
+  region.hidden = deletionUndos.length === 0 && !undoMessage;
+  const key = JSON.stringify([deletionUndos, [...undoBusy], undoMessage]); if (key === undoRenderKey) return; undoRenderKey = key;
+  region.innerHTML = `${undoMessage ? `<div class="undo-error" role="alert"><span>${escapeHtml(undoMessage)}</span><button type="button" data-dismiss-undo-message aria-label="Закрыть сообщение">×</button></div>` : ""}<ul>${deletionUndos.map((item) => `<li><span><small>Задача удалена</small><strong>${escapeHtml(item.title)}</strong></span><button type="button" data-undo-deletion="${item.token}" aria-label="Отменить удаление: ${escapeHtml(item.title)}" ${undoBusy.has(item.token) ? "disabled" : ""}>Отменить</button></li>`).join("")}</ul>`;
+  region.querySelector<HTMLButtonElement>("[data-dismiss-undo-message]")?.addEventListener("click", () => { undoMessage = ""; renderDeletionUndos(); });
+  region.querySelectorAll<HTMLButtonElement>("[data-undo-deletion]").forEach((button) => button.addEventListener("click", async () => {
+    const token = button.dataset.undoDeletion!; if (undoBusy.has(token)) return;
+    undoBusy.add(token); undoMessage = ""; renderDeletionUndos();
+    try {
+      const restored = await invoke<Task>("undo_task_deletion", { token });
+      deletionUndos = deletionUndos.filter((item) => item.token !== token);
+      await refreshTasks(); if (activeView === "history") await refreshHistory();
+      if (restored.status === "archived") undoMessage = "Удаление отменено. Срок задачи истёк, она находится в архиве.";
+      else root.querySelector<HTMLButtonElement>(`[data-toggle-task="${CSS.escape(restored.id)}"]`)?.focus();
+    } catch (error) { undoMessage = backendMessage(error); }
+    finally { undoBusy.delete(token); await refreshDeletionUndos(); renderDeletionUndos(); }
+  }));
+}
+async function refreshDeletionUndos(): Promise<void> {
+  try { deletionUndos = await invoke<UndoDeletion[]>("list_deletion_undos"); }
+  catch (error) { undoMessage = backendMessage(error); }
+  renderDeletionUndos();
+}
+
 let autostartEnabled: boolean | null = null;
 let autostartBusy = false;
 let autostartMessage = "";
@@ -566,6 +601,7 @@ function renderTask(task: Task, index: number, completed = false): string {
       </button>
       <div class="task-content">${title}</div>
       ${completed ? "" : `<button class="reminder-button ${task.reminderAt !== null ? "has-reminder" : ""}" type="button" data-edit-reminder="${task.id}" aria-label="${task.reminderAt !== null ? `Изменить напоминание: ${escapeHtml(task.title)}` : `Добавить напоминание: ${escapeHtml(task.title)}`}">${task.reminderAt !== null ? `<time>${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(task.reminderAt)}</time>` : "◷"}</button>`}
+      <button class="task-delete" type="button" data-delete-task="${task.id}" aria-label="Удалить задачу: ${escapeHtml(task.title)}" title="Удалить задачу" ${saving || taskAnimationLocks.has(task.id) ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"/></svg></button>
     </li>`;
 }
 
@@ -641,7 +677,7 @@ function bindBackupSettings(): void {
       restoredPath = path;
       restorePreview = null; editingTaskId = null; fullscreenTimerId = null; taskAnimationLocks.clear();
       preferences = await invoke<typeof preferences>("get_preferences"); preferencesReady = true;
-      await Promise.all([refreshTasks(), refreshTimers(false), loadShortcuts()]);
+      await Promise.all([refreshTasks(), refreshTimers(false), loadShortcuts(), refreshDeletionUndos()]);
       const overlayStatus = await invoke<OverlayShortcutStatus>("get_overlay_shortcut_status");
       overlayShortcut = overlayStatus.shortcut; overlayShortcutAvailable = overlayStatus.available;
       backupMessage = `Данные восстановлены. Предыдущие данные сохранены: ${path}`;
@@ -925,6 +961,14 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-delete-task]").forEach((button) => button.addEventListener("click", async () => {
+    const id = button.dataset.deleteTask; if (!id || saving || taskAnimationLocks.has(id)) return;
+    const deleted = await perform(async () => {
+      const undo = await invoke<UndoDeletion>("delete_task", { id });
+      deletionUndos = [...deletionUndos.filter((item) => item.taskId !== id), undo]; undoMessage = ""; renderDeletionUndos();
+    });
+    if (deleted) { await refreshDeletionUndos(); if (activeView === "history") await refreshHistory(); }
+  }));
   bindNotificationControls();
   root.querySelectorAll<HTMLButtonElement>("[data-add-timer]").forEach((button) => button.addEventListener("click", () => { timerError = ""; timerDialogOpen = true; render(true); }));
   root.querySelector<HTMLButtonElement>("[data-close-timer]")?.addEventListener("click", () => { timerDialogOpen = false; timerError = ""; render(true); });
@@ -1669,7 +1713,7 @@ window.setInterval(async () => {
   }
 }, 60_000);
 window.setInterval(() => { if (activeView === "timers") void refreshTimers(false); }, 1_000);
-void listen("tasks-changed", () => { void refreshTasks(); });
+void listen("tasks-changed", () => { void refreshTasks(); void refreshDeletionUndos(); if (activeView === "history") void refreshHistory(); });
 void listen("overlay-open-today", () => {
   activeView = "today";
   window.history.pushState(null, "", "#today");

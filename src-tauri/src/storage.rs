@@ -215,6 +215,7 @@ pub fn prepare(source: &Path, directory: &Path) -> Result<Prepared, AppError> {
     store.list_timers()?;
     store.preferences()?;
     store.shortcuts()?;
+    store.list_deletion_undos(0)?;
     let connection = &store.connection;
     let violations: i64 = connection
         .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {

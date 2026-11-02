@@ -6,12 +6,12 @@ use std::{
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
     Active,
@@ -19,7 +19,7 @@ pub enum TaskStatus {
     Archived,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReminderState {
     Pending,
@@ -28,7 +28,7 @@ pub enum ReminderState {
 }
 
 impl ReminderState {
-    fn parse(value: &str) -> rusqlite::Result<Self> {
+    pub(crate) fn parse(value: &str) -> rusqlite::Result<Self> {
         match value {
             "pending" => Ok(Self::Pending),
             "fired" => Ok(Self::Fired),
@@ -45,7 +45,7 @@ pub struct DueReminder {
 }
 
 impl TaskStatus {
-    fn parse(value: &str) -> rusqlite::Result<Self> {
+    pub(crate) fn parse(value: &str) -> rusqlite::Result<Self> {
         match value {
             "active" => Ok(Self::Active),
             "completed" => Ok(Self::Completed),
@@ -55,7 +55,7 @@ impl TaskStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
     pub id: String,
@@ -102,7 +102,7 @@ pub struct Preferences {
     pub archive_hours: i64,
 }
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 pub const MAX_TIMER_SECONDS: i64 = 359_999;
 
@@ -259,6 +259,11 @@ impl TaskStore {
             tx.execute_batch("CREATE TABLE keyboard_shortcuts(action TEXT PRIMARY KEY NOT NULL, combination TEXT NOT NULL); PRAGMA user_version=7;")?;
             tx.commit()?;
         }
+        if schema_version < 8 {
+            let tx = connection.unchecked_transaction()?;
+            tx.execute_batch("CREATE TABLE deletion_undos(token TEXT PRIMARY KEY NOT NULL,task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,previous_task TEXT NOT NULL,deleted_task TEXT NOT NULL,expires_at INTEGER NOT NULL); CREATE INDEX deletion_undos_expiration ON deletion_undos(expires_at); PRAGMA user_version=8;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection,
             timer_clocks: Mutex::new(HashMap::new()),
@@ -345,6 +350,7 @@ impl TaskStore {
             "timers",
             "preferences",
             "keyboard_shortcuts",
+            "deletion_undos",
         ] {
             let mut stmt = tx
                 .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
@@ -1154,6 +1160,9 @@ impl TaskStore {
             .connection
             .unchecked_transaction()
             .map_err(|_| AppError::storage())?;
+        transaction
+            .execute("DELETE FROM deletion_undos WHERE expires_at <= ?1", [now])
+            .map_err(|_| AppError::storage())?;
         let mut statement = transaction.prepare(
             "SELECT id FROM tasks WHERE status IN ('active', 'completed') AND created_at <= ?1 ORDER BY created_at, id",
         ).map_err(|_| AppError::storage())?;
@@ -1212,7 +1221,7 @@ fn validate_title(raw_title: &str) -> Result<&str, AppError> {
     Ok(title)
 }
 
-fn now_millis() -> i64 {
+pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1229,7 +1238,7 @@ fn task_exists(connection: &Connection, id: &str) -> Result<bool, AppError> {
         .map_err(|_| AppError::storage())
 }
 
-fn compact_active_positions(connection: &Connection) -> Result<(), AppError> {
+pub(crate) fn compact_active_positions(connection: &Connection) -> Result<(), AppError> {
     let mut statement = connection
         .prepare("SELECT id FROM tasks WHERE status = 'active' ORDER BY position")
         .map_err(|_| AppError::storage())?;
@@ -1250,7 +1259,7 @@ fn compact_active_positions(connection: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
-fn record_event(
+pub(crate) fn record_event(
     connection: &Connection,
     task_id: &str,
     kind: &str,
