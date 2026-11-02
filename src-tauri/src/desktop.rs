@@ -80,3 +80,76 @@ mod tests {
         );
     }
 }
+
+fn link_error() -> AppError {
+    AppError {
+        code: "link_error",
+        message: "Не удалось открыть ссылку в браузере Windows.".into(),
+    }
+}
+fn validate_about_url(url: &str) -> Result<(), AppError> {
+    if [
+        "https://taskmaster339.github.io/",
+        "https://github.com/TAskMAster339/taskMaster",
+    ]
+    .contains(&url)
+    {
+        Ok(())
+    } else {
+        Err(link_error())
+    }
+}
+#[tauri::command]
+pub fn open_about_link(url: String) -> Result<(), AppError> {
+    validate_about_url(&url)?;
+    #[cfg(windows)]
+    {
+        use windows::{
+            Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+            core::{PCWSTR, w},
+        };
+        let wide: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
+        // Only fixed HTTPS addresses reach ShellExecute; no shell or command arguments.
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                PCWSTR(wide.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result.0 as isize > 32 {
+            Ok(())
+        } else {
+            Err(link_error())
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Err(link_error())
+    }
+}
+#[cfg(test)]
+mod about_tests {
+    use super::*;
+    #[test]
+    fn about_links_allow_only_exact_public_addresses() {
+        for url in [
+            "https://taskmaster339.github.io/",
+            "https://github.com/TAskMAster339/taskMaster",
+        ] {
+            assert!(validate_about_url(url).is_ok());
+        }
+        for url in [
+            "https://evil.example/",
+            "file:///C:/Windows",
+            "javascript:alert(1)",
+            "https://taskmaster339.github.io/?token=secret",
+            "https://github.com/TAskMAster339/taskMaster/other",
+        ] {
+            assert!(validate_about_url(url).is_err(), "{url}");
+        }
+    }
+}

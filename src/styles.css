@@ -437,3 +437,7 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .undo-notices button { flex: 0 0 auto; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
 .undo-notices button:hover { color: var(--obi); border-color: var(--obi); }
 .undo-error { margin-bottom: 8px; border-color: var(--obi); }
+
+.about-links { display: flex; flex-wrap: wrap; gap: 16px; }
+.about-links a { color: var(--text); text-decoration: underline; text-underline-offset: 4px; min-height: 44px; display: inline-flex; align-items: center; }
+.about-links a:hover { color: var(--obi); }

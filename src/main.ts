@@ -794,7 +794,7 @@ function renderSettings(): void {
     ${renderBackupSettings()}
     <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p><div class="settings-actions"><button type="button" class="danger-action" data-clear-data="tasks" ${loadFailed ? "disabled" : ""}>Очистить задачи</button><button type="button" class="danger-action" data-clear-data="allData" ${loadFailed ? "disabled" : ""}>Сбросить данные</button></div></section>
     <section class="settings-section"><h2>Диагностика</h2><p>Журналы находятся в папке данных → logs. Хранятся четыре файла до 256 КБ каждый, без названий задач и таймеров.</p><p role="alert" data-diagnostics-warning></p></section>
-    <section class="settings-section"><h2>О приложении</h2><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
+    <section class="settings-section"><h2>О приложении</h2><p class="about-links"><a href="https://taskmaster339.github.io/" data-about-link>Персональный сайт</a><a href="https://github.com/TAskMAster339/taskMaster" data-about-link>GitHub</a></p><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
   </main></div>`;
   bindEvents();
   bindBackupSettings();
@@ -845,6 +845,11 @@ function renderSettings(): void {
     catch { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = "Не удалось сохранить тему. Повторите попытку."; }
   });
   root.querySelectorAll<HTMLButtonElement>("[data-clear-data]").forEach((button) => button.addEventListener("click", () => openClearData(button.dataset.clearData as ClearMode, button)));
+  root.querySelectorAll<HTMLAnchorElement>("[data-about-link]").forEach((link) => link.addEventListener("click", async (event) => {
+    event.preventDefault();
+    try { await invoke("open_about_link", { url: link.href }); }
+    catch (error) { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = backendMessage(error); }
+  }));
   const settingsPage = root.querySelector<HTMLElement>(".settings-view");
   if (settingsPage) settingsPage.scrollTop = previousScrollTop;
   void refreshDiagnosticsWarning();

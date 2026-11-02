@@ -1237,6 +1237,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            desktop::open_about_link,
             clear_user_data,
             diagnostics::get_diagnostics_warning,
             notifications::get_notification_status,
