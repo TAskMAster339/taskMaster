@@ -446,16 +446,12 @@ fn overlay_timer_window_size(timer_count: usize, max_width: f64) -> (f64, f64) {
     if timer_count == 0 {
         return (360.0, 154.0);
     }
-    let columns = timer_count.min(2);
-    let side = 420.0_f64
-        .min(((max_width - 44.0) / 2.0).max(0.0))
-        .max(300.0);
-    let width = if columns > 1 {
-        (columns as f64 * side + 44.0 + 12.0).min(max_width.max(360.0))
-    } else {
-        (side + 32.0).min(max_width.max(360.0))
-    };
-    let height = 154.0 + 20.0 + side;
+    let columns = timer_count.div_ceil(2);
+    let side = 336.0_f64.min((max_width - 24.0).max(280.0));
+    let width =
+        (360.0 + columns.saturating_sub(1) as f64 * (side + 12.0)).min(max_width.max(360.0));
+    let rows = timer_count.min(2);
+    let height = 154.0 + 20.0 + rows as f64 * side + rows.saturating_sub(1) as f64 * 12.0;
     (width, height)
 }
 
