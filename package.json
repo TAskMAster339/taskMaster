@@ -9,8 +9,8 @@
     "test": "npm run test:unit",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:unit": "node --experimental-strip-types --test scripts/shortcuts.test.mjs scripts/batches.test.mjs scripts/i18n.test.mjs",
-    "test:browser": "node --test scripts/features.test.mjs",
+    "test:unit": "node --experimental-strip-types --test frontend/tests/unit/*.test.mjs",
+    "test:browser": "node --test frontend/tests/browser/*.test.mjs",
     "test:all": "npm run test:unit && npm run test:browser"
   },
   "dependencies": {

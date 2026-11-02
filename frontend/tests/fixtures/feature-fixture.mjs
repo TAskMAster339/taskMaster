@@ -1,7 +1,7 @@
 // Development-only browser fixture. Never reads or modifies the native database.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
-import { defaultShortcuts } from '../src/shortcuts.ts';
+import { defaultShortcuts } from '../../src/shortcuts.ts';
 if (window.__TAURI_INTERNALS__) throw Error('Browser fixture must not run in Tauri');
 const query = new URLSearchParams(location.search);
 const count = Number(query.get('count') || 100);
@@ -66,5 +66,5 @@ window.addEventListener('storage', event => {
   if (event.key === 'fixture.display') { display = JSON.parse(event.newValue); void emit('display-settings-changed', display); }
 });
 window.featureFixture = { calls, resetRequested: false, setResetError(value) { resetError = value; }, async setDatabaseError(value) { databaseError = value; await emit('tasks-changed'); }, setReminderError(value) { reminderError = value; }, setDisplayError(value) { displayError = value; }, async removeTask(id) { tasks = tasks.filter(task => task.id !== id); await emit('tasks-changed'); } };
-await import('../src/main.ts');
+await import('../../src/main.ts');
 window.featureFixture.ready = true;

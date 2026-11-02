@@ -1,6 +1,6 @@
 // Development-only fixture. Browser: mocked data. Native: explicitly seeded disposable DB.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
-import { defaultShortcuts } from '../src/shortcuts.ts';
+import { defaultShortcuts } from '../../src/shortcuts.ts';
 
 const count = Math.min(5000, Math.max(1, Number(new URLSearchParams(location.search).get('count')) || 5000));
 const now = Date.now();
@@ -45,7 +45,7 @@ const paint = () => new Promise((resolve) => requestAnimationFrame(() => request
 const rowCount = () => app.querySelector('.task-list')?.childElementCount ?? 0;
 const result = { fixtureRevision: 'batched-32-position-snapshot', count, nativeRuntime, userAgent: navigator.userAgent, errors };
 const start = performance.now();
-await import('../src/main.ts');
+await import('../../src/main.ts');
 const deadline = performance.now() + 10000;
 while (!app.querySelector('.task-row') && performance.now() < deadline) {
   await new Promise((resolve) => setTimeout(resolve, 10));

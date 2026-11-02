@@ -19,7 +19,7 @@ async function fixture(options = {}, count = 100) {
  const page = await context.newPage();
  const errors = [];
  page.on('pageerror', error => errors.push(error.message));
- await page.goto(`${base}/scripts/feature-check.html?count=${count}`);
+ await page.goto(`${base}/tests/fixtures/feature-check.html?count=${count}`);
  await page.waitForFunction(() => window.featureFixture?.ready);
  await page.evaluate(() => document.fonts.ready);
  await page.waitForFunction(value => document.querySelectorAll('.task-row').length === value, count);
@@ -54,7 +54,7 @@ test('settings synchronize with the overlay, including existing timer controls',
  const { context, page, errors } = await fixture();
  try {
   const overlay = await context.newPage();
-  await overlay.goto(`${base}/scripts/feature-check.html?window=overlay&running=1`);
+  await overlay.goto(`${base}/tests/fixtures/feature-check.html?window=overlay&running=1`);
   await overlay.waitForFunction(() => window.featureFixture?.ready);
   await page.locator('[data-view="settings"]').click();
   await page.locator('[data-language-select]').selectOption('en');
@@ -279,7 +279,7 @@ test('full reset confirms backup deletion, works with an unavailable DB, and onl
 test('5000-task performance fixture renders and switches views without errors', async () => {
  const page = await browser.newPage();
  try {
-  await page.goto(`${base}/scripts/ui-check.html?count=5000`);
+  await page.goto(`${base}/tests/performance/ui-check.html?count=5000`);
   await page.waitForSelector('pre');
   const result = JSON.parse(await page.locator('pre').innerText());
   assert.equal(result.renderedRows, 5000);

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { keyboardCombination } from '../src/shortcuts.ts';
+import { keyboardCombination } from '../../src/shortcuts.ts';
 const event = (code, modifiers={}) => ({code, ctrlKey:false, altKey:false, shiftKey:false, metaKey:false, ...modifiers});
 test('matches physical keys regardless of typing layout and exact modifiers', () => {
   assert.equal(keyboardCombination(event('KeyN',{ctrlKey:true})), 'Ctrl+N');
