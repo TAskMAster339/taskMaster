@@ -1,5 +1,6 @@
-use crate::AppError;
+use crate::app::error::AppError;
 use std::collections::{BTreeMap, HashSet};
+
 pub fn defaults() -> BTreeMap<String, String> {
     [
         ("new_task", "Ctrl+N"),
@@ -18,9 +19,11 @@ pub fn defaults() -> BTreeMap<String, String> {
     .map(|(a, k)| (a.into(), k.into()))
     .collect()
 }
+
 fn invalid() -> AppError {
     AppError { code: "invalid_shortcut", message: "Нажмите сочетание с Ctrl или Alt либо функциональную клавишу. Системные сочетания недоступны.".into() }
 }
+
 pub fn normalize(value: &str) -> Result<String, AppError> {
     let parts: Vec<_> = value.split('+').map(str::trim).collect();
     let mut modifiers = HashSet::new();
@@ -87,6 +90,7 @@ pub fn normalize(value: &str) -> Result<String, AppError> {
     }
     Ok(result)
 }
+
 pub fn validate(bindings: &BTreeMap<String, String>, overlay: &str) -> Result<(), AppError> {
     if bindings.keys().ne(defaults().keys()) {
         return Err(invalid());
@@ -102,35 +106,7 @@ pub fn validate(bindings: &BTreeMap<String, String>, overlay: &str) -> Result<()
     }
     Ok(())
 }
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn rejects_duplicate_and_global_conflicts() {
-        let mut keys = defaults();
-        assert!(validate(&keys, "Ctrl+Alt+Space").is_ok());
-        keys.insert("new_task".into(), "Shift+Ctrl+N".into());
-        assert!(validate(&keys, "Ctrl+Alt+Space").is_err());
-        keys = defaults();
-        keys.insert("new_task".into(), "Alt+Ctrl+Space".into());
-        assert!(validate(&keys, "Ctrl+Alt+Space").is_err());
-    }
-    #[test]
-    fn validates_supported_keys_and_reserved_combinations() {
-        assert_eq!(normalize(" shift + control + n ").unwrap(), "Ctrl+Shift+N");
-        assert_eq!(normalize("Ctrl+,").unwrap(), "Ctrl+Comma");
-        for key in [
-            "",
-            "N",
-            "Ctrl",
-            "Ctrl+Ctrl+N",
-            "Alt+F4",
-            "Ctrl+Alt+Delete",
-            "Ctrl+Shift+Escape",
-            "Ctrl+Unknown",
-            "F",
-        ] {
-            assert!(normalize(key).is_err(), "{key}");
-        }
-    }
-}
+#[path = "../tests/shortcuts_tests.rs"]
+mod tests;

@@ -1,4 +1,5 @@
 use serde::Serialize;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Permission {
@@ -9,6 +10,7 @@ enum Permission {
     Unavailable,
     Unknown,
 }
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationStatus {
@@ -17,6 +19,7 @@ pub struct NotificationStatus {
     can_test: bool,
     uses_system_identity: bool,
 }
+
 // Windows.UI.Notifications.NotificationSetting, documented by Microsoft.
 fn status_for_setting(setting: Option<i32>, uses_system_identity: bool) -> NotificationStatus {
     let (state, message, can_test) = match setting {
@@ -96,43 +99,45 @@ fn query_status(app: &tauri::AppHandle) -> NotificationStatus {
     }
 }
 
-pub fn delivery_error() -> crate::AppError {
-    crate::AppError {
+pub fn delivery_error() -> crate::app::error::AppError {
+    crate::app::error::AppError {
         code: "notification_error",
         message:
             "Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления."
                 .into(),
     }
 }
-pub fn ensure_available(app: &tauri::AppHandle) -> Result<(), crate::AppError> {
+
+pub fn ensure_available(app: &tauri::AppHandle) -> Result<(), crate::app::error::AppError> {
     let status = query_status(app);
     if status.can_test {
         Ok(())
     } else {
-        Err(crate::AppError {
+        Err(crate::app::error::AppError {
             code: "notifications_blocked",
             message: status.message,
         })
     }
 }
 
-#[tauri::command]
 pub async fn get_notification_status(
     app: tauri::AppHandle,
-) -> Result<NotificationStatus, crate::AppError> {
+) -> Result<NotificationStatus, crate::app::error::AppError> {
     tauri::async_runtime::spawn_blocking(move || query_status(&app))
         .await
         .map_err(|_| delivery_error())
 }
-#[tauri::command]
-pub async fn send_test_notification(app: tauri::AppHandle) -> Result<(), crate::AppError> {
+
+pub async fn send_test_notification(
+    app: tauri::AppHandle,
+) -> Result<(), crate::app::error::AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         use tauri_plugin_notification::NotificationExt;
         ensure_available(&app)?;
         app.notification()
             .builder()
             .title("taskMaster")
-            .body(crate::presentation::text(
+            .body(crate::platform::presentation::text(
                 "Проверка уведомлений taskMaster.",
             ))
             .show()
@@ -141,8 +146,8 @@ pub async fn send_test_notification(app: tauri::AppHandle) -> Result<(), crate::
     .await
     .map_err(|_| delivery_error())?
 }
-#[tauri::command]
-pub fn open_notification_settings() -> Result<(), crate::AppError> {
+
+pub fn open_notification_settings() -> Result<(), crate::app::error::AppError> {
     #[cfg(windows)]
     {
         std::process::Command::new("explorer.exe")
@@ -158,43 +163,5 @@ pub fn open_notification_settings() -> Result<(), crate::AppError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn windows_blocks_are_not_reported_as_permission_granted() {
-        for code in 1..=4 {
-            let state = status_for_setting(Some(code), false);
-            assert_ne!(state.state, Permission::Enabled);
-            assert!(!state.can_test);
-        }
-        assert!(status_for_setting(Some(0), false).can_test);
-    }
-    #[test]
-    fn failed_or_unknown_check_never_claims_permission_granted() {
-        for setting in [None, Some(99)] {
-            let state = status_for_setting(setting, false);
-            assert_eq!(state.state, Permission::Unknown);
-            assert!(state.can_test);
-        }
-    }
-    #[test]
-    fn notification_identity_matches_the_actual_delivery_identity() {
-        let target = std::path::Path::new("workspace").join("target");
-        for profile in ["debug", "release"] {
-            let (id, system) = notification_identity(
-                &target.join(profile).join("taskmaster.exe"),
-                "ru.taskmaster.desktop",
-            );
-            assert!(system);
-            assert!(id.ends_with(r"WindowsPowerShell\v1.0\powershell.exe"));
-        }
-        let (id, system) = notification_identity(
-            &std::path::Path::new("Program Files")
-                .join("taskMaster")
-                .join("taskmaster.exe"),
-            "ru.taskmaster.desktop",
-        );
-        assert!(!system);
-        assert_eq!(id, "ru.taskmaster.desktop");
-    }
-}
+#[path = "../tests/notifications_tests.rs"]
+mod tests;

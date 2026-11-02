@@ -1,4 +1,4 @@
-use crate::AppError;
+use crate::app::error::AppError;
 use tauri::AppHandle;
 use tauri_plugin_autostart::ManagerExt;
 
@@ -21,7 +21,6 @@ fn registration_exists() -> Result<bool, AppError> {
     }
 }
 
-#[tauri::command]
 pub fn get_autostart_enabled(app: AppHandle) -> Result<bool, AppError> {
     #[cfg(windows)]
     if !registration_exists()? {
@@ -30,7 +29,6 @@ pub fn get_autostart_enabled(app: AppHandle) -> Result<bool, AppError> {
     app.autolaunch().is_enabled().map_err(|_| autostart_error())
 }
 
-#[tauri::command]
 pub fn set_autostart_enabled(enabled: bool, app: AppHandle) -> Result<bool, AppError> {
     let manager = app.autolaunch();
     if enabled {
@@ -67,19 +65,10 @@ pub fn set_autostart_enabled(enabled: bool, app: AppHandle) -> Result<bool, AppE
 fn startup_command(executable: &std::path::Path) -> String {
     format!("\"{}\"", executable.display())
 }
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn startup_command_quotes_paths_with_spaces() {
-        assert_eq!(
-            startup_command(std::path::Path::new(
-                r"C:\Program Files\taskMaster\taskmaster.exe"
-            )),
-            r#""C:\Program Files\taskMaster\taskmaster.exe""#
-        );
-    }
-}
+#[path = "../tests/desktop_tests.rs"]
+mod tests;
 
 fn link_error() -> AppError {
     AppError {
@@ -87,6 +76,7 @@ fn link_error() -> AppError {
         message: "Не удалось открыть ссылку в браузере Windows.".into(),
     }
 }
+
 fn validate_about_url(url: &str) -> Result<(), AppError> {
     if [
         "https://taskmaster339.github.io/",
@@ -99,7 +89,7 @@ fn validate_about_url(url: &str) -> Result<(), AppError> {
         Err(link_error())
     }
 }
-#[tauri::command]
+
 pub fn open_about_link(url: String) -> Result<(), AppError> {
     validate_about_url(&url)?;
     #[cfg(windows)]
@@ -131,25 +121,7 @@ pub fn open_about_link(url: String) -> Result<(), AppError> {
         Err(link_error())
     }
 }
+
 #[cfg(test)]
-mod about_tests {
-    use super::*;
-    #[test]
-    fn about_links_allow_only_exact_public_addresses() {
-        for url in [
-            "https://taskmaster339.github.io/",
-            "https://github.com/TAskMAster339/taskMaster",
-        ] {
-            assert!(validate_about_url(url).is_ok());
-        }
-        for url in [
-            "https://evil.example/",
-            "file:///C:/Windows",
-            "javascript:alert(1)",
-            "https://taskmaster339.github.io/?token=secret",
-            "https://github.com/TAskMAster339/taskMaster/other",
-        ] {
-            assert!(validate_about_url(url).is_err(), "{url}");
-        }
-    }
-}
+#[path = "../tests/desktop_about_tests.rs"]
+mod about_tests;
