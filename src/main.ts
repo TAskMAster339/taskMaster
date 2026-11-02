@@ -1089,7 +1089,8 @@ async function renderOverlay(): Promise<void> {
       shownTaskId = task?.id ?? null;
       const retainedCards = new Map([...overlayRoot.querySelectorAll<HTMLElement>("[data-timer-card]")].map((card) => [card.dataset.timerCard!, card]));
       lastRenderKey = renderKey;
-      overlayRoot.innerHTML = `<section class="overlay-card" aria-label="Следующая задача">
+      const staged = document.createElement("div");
+      staged.innerHTML = `<section class="overlay-card" aria-label="Следующая задача">
         <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>СЛЕДУЮЩАЯ ЗАДАЧА</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? "Снять закрепление и разрешить перемещение" : "Закрепить положение поверх окон"}" title="${pinned ? "Открепить" : "Закрепить положение и поверх окон"}">${pinned ? "◆" : "◇"}</button></header>
         ${task ? `<div class="overlay-task"><strong>${escapeHtml(task.title)}</strong></div>
           <footer class="overlay-actions"><button type="button" data-overlay-complete="${task.id}">Выполнено</button><button type="button" data-overlay-open>Открыть список</button></footer>`
@@ -1097,15 +1098,37 @@ async function renderOverlay(): Promise<void> {
         ${overlayError ? `<p class="overlay-error" role="alert">${escapeHtml(overlayError)} <button type="button" data-overlay-retry>Повторить</button></p>` : ""}
       </section>`;
       if (displayTimers.length) {
-        overlayRoot.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="Запущенные таймеры"><div class="overlay-timer-grid">${displayTimers.map((timer) => timerCard(timer, false, true).replace('class="timer-card ', `class="timer-card ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""} `)).join("")}</div></section>`);
+        staged.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="Запущенные таймеры"><div class="overlay-timer-grid">${displayTimers.map((timer) => timerCard(timer, false, true).replace('class="timer-card ', `class="timer-card ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""} `)).join("")}</div></section>`);
       }
-      for (const card of overlayRoot.querySelectorAll<HTMLElement>("[data-timer-card]")) {
-        const old = retainedCards.get(card.dataset.timerCard!);
-        if (old && old.dataset.timerStatus === card.dataset.timerStatus) {
-          old.classList.toggle("is-evaporating", endingTimers.has(card.dataset.timerCard!));
-          card.replaceWith(old);
-        }
+      const nextHeader = staged.querySelector<HTMLElement>(".overlay-card")!;
+      const currentHeader = overlayRoot.querySelector<HTMLElement>(".overlay-card");
+      if (!currentHeader) overlayRoot.prepend(nextHeader);
+      else currentHeader.replaceWith(nextHeader);
+      let grid = overlayRoot.querySelector<HTMLElement>(".overlay-timer-grid");
+      if (!grid && displayTimers.length) {
+        const area = document.createElement("section");
+        area.className = "overlay-timer-area";
+        area.setAttribute("aria-label", "Запущенные таймеры");
+        grid = document.createElement("div");
+        grid.className = "overlay-timer-grid";
+        area.append(grid);
+        overlayRoot.append(area);
       }
+      const wanted = new Set(displayTimers.map((timer) => timer.id));
+      for (const [id, card] of retainedCards) if (!wanted.has(id)) card.remove();
+      for (const next of staged.querySelectorAll<HTMLElement>("[data-timer-card]")) {
+        const id = next.dataset.timerCard!;
+        const old = retainedCards.get(id);
+        if (old) {
+          old.classList.toggle("is-evaporating", endingTimers.has(id));
+          if (!enteringTimerIds.has(id)) old.classList.remove("is-entering");
+          if (old.dataset.timerStatus !== next.dataset.timerStatus) {
+            old.dataset.timerStatus = next.dataset.timerStatus;
+            old.querySelector(".timer-controls")?.replaceWith(next.querySelector(".timer-controls")!);
+          }
+        } else grid?.append(next);
+      }
+      if (!displayTimers.length) overlayRoot.querySelector(".overlay-timer-area")?.remove();
       if (taskChanged) overlayRoot.querySelector<HTMLElement>(".overlay-task, .overlay-empty")?.animate([{ opacity: 0, transform: "translateX(32px)" }, { opacity: 1, transform: "translateX(0)" }], { duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280, easing: "ease-out" });
       overlayRoot.querySelectorAll<HTMLButtonElement>("[data-hide-overlay-timer]").forEach((button) => { button.onclick = () => {
         const id = button.dataset.hideOverlayTimer;

@@ -479,6 +479,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<WebviewWindow, AppError> {
             .position(24.0, 24.0)
             .decorations(false)
             .transparent(true)
+            .shadow(false)
             .resizable(false)
             .focused(false)
             .visible(false)
