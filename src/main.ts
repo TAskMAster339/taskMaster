@@ -898,16 +898,21 @@ function openClearData(mode: ClearMode): void {
   dialog.dataset.clearDialog = "";
   dialog.setAttribute("aria-labelledby", "clear-heading");
   dialog.setAttribute("aria-describedby", "clear-description");
-  dialog.innerHTML = `<form><h2 id="clear-heading">${mode === "tasks" ? t("Очистить задачи?") : t("Сбросить данные?")}</h2><p id="clear-description">${mode === "tasks" ? t("Все задачи, архив, история и напоминания будут удалены.") : t("Все задачи, архив, история, напоминания и таймеры будут удалены.")} ${t("Отменить действие нельзя. Настройки и существующие резервные копии сохранятся. Новая копия не создаётся.")}</p><p role="alert" data-clear-error></p><div class="reminder-actions"><button type="button" data-clear-cancel autofocus>${t("Отмена")}</button><button type="submit" class="danger-action">${mode === "tasks" ? t("Очистить задачи") : t("Сбросить данные")}</button></div></form>`;
+  const description = mode === "tasks"
+    ? `${t("Все задачи, архив, история и напоминания будут удалены.")} ${t("Таймеры, настройки и существующие резервные копии сохранятся. Новая копия не создаётся. Отменить действие нельзя.")}`
+    : t("Будут удалены все задачи, история, таймеры, настройки, журналы и резервные копии приложения. Автозапуск будет отключён. Отменить действие нельзя. Приложение перезапустится с настройками по умолчанию.");
+  dialog.innerHTML = `<form><h2 id="clear-heading">${mode === "tasks" ? t("Очистить задачи?") : t("Сбросить данные?")}</h2><p id="clear-description">${description}</p><p role="alert" data-clear-error></p><p role="status" data-clear-status></p><div class="reminder-actions"><button type="button" data-clear-cancel autofocus>${t("Отмена")}</button><button type="submit" class="danger-action">${mode === "tasks" ? t("Очистить задачи") : t("Сбросить данные")}</button></div></form>`;
   const close = (): void => { if (clearingData) return; dialog.close(); dialog.remove(); root.querySelector<HTMLButtonElement>(`[data-clear-data="${mode}"]`)?.focus({ preventScroll: true }); };
   dialog.querySelector("[data-clear-cancel]")!.addEventListener("click", close);
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
   dialog.querySelector("form")!.addEventListener("submit", async (event) => {
     event.preventDefault(); if (clearingData) return;
     clearingData = true;
+    dialog.querySelector<HTMLElement>("[data-clear-error]")!.textContent = "";
     dialog.querySelectorAll("button").forEach((button) => { button.disabled = true; });
     try {
       await invoke("clear_user_data", { mode });
+      if (mode === "allData") { dialog.querySelector<HTMLElement>("[data-clear-status]")!.textContent = t("Перезапуск…"); return; }
       clearingData = false; close();
     } catch (error) {
       clearingData = false;
@@ -945,7 +950,7 @@ function renderSettings(): void {
       }).join("")}</div>
     </section>
     ${renderBackupSettings()}
-    <section class="settings-section"><h2>${t("Данные")}</h2><button class="retry-button" type="button" data-export-json>${t("Выгрузить JSON в Загрузки")}</button><p role="status" data-export-status></p><div class="settings-actions"><button type="button" class="danger-action" data-clear-data="tasks" ${loadFailed ? "disabled" : ""}>${t("Очистить задачи")}</button><button type="button" class="danger-action" data-clear-data="allData" ${loadFailed ? "disabled" : ""}>${t("Сбросить данные")}</button></div></section>
+    <section class="settings-section"><h2>${t("Данные")}</h2><button class="retry-button" type="button" data-export-json>${t("Выгрузить JSON в Загрузки")}</button><p role="status" data-export-status></p><div class="settings-actions"><button type="button" class="danger-action" data-clear-data="tasks" ${loadFailed ? "disabled" : ""}>${t("Очистить задачи")}</button><button type="button" class="danger-action" data-clear-data="allData">${t("Сбросить данные")}</button></div></section>
     <section class="settings-section"><h2>${t("Диагностика")}</h2><p>${t("Журналы находятся в папке данных → logs. Хранятся четыре файла до 256 КБ каждый, без названий задач и таймеров.")}</p><p role="alert" data-diagnostics-warning></p></section>
     <section class="settings-section"><h2>${t("О приложении")}</h2><p class="about-links"><a href="https://taskmaster339.github.io/" data-about-link>${t("Персональный сайт")}</a><a href="https://github.com/TAskMAster339/taskMaster" data-about-link>GitHub</a></p><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
   </main></div>`;

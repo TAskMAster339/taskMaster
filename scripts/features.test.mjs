@@ -218,3 +218,55 @@ test('data actions remain readable in normal light and dark themes', async () =>
   assert.deepEqual(errors, []);
  } finally { await context.close(); }
 });
+
+test('clearing tasks keeps display settings and timers', async () => {
+ const { context, page, errors } = await fixture();
+ try {
+  await page.locator('[data-view="settings"]').click();
+  await page.locator('[data-language-select]').selectOption('en');
+  await page.waitForFunction(() => document.documentElement.lang === 'en' && !document.querySelector('[data-high-contrast]').disabled);
+  await page.locator('[data-clear-data="tasks"]').click();
+  assert.match(await page.locator('#clear-description').innerText(), /existing backups are kept/);
+  await page.locator('[data-clear-dialog] button[type="submit"]').click();
+  await page.locator('[data-clear-dialog]').waitFor({ state: 'detached' });
+  assert.equal(await page.locator('html').getAttribute('lang'), 'en');
+  await page.locator('[data-view="timers"]').click();
+  assert.equal(await page.locator('[data-timer-card]').count(), 1);
+  await page.locator('[data-view="today"]').click();
+  assert.equal(await page.locator('.task-row').count(), 0);
+  assert.equal(await page.evaluate(() => window.featureFixture.resetRequested), false);
+  assert.deepEqual(errors, []);
+ } finally { await context.close(); }
+});
+
+test('full reset confirms backup deletion, works with an unavailable DB, and only restarts after success', async () => {
+ const { context, page, errors } = await fixture();
+ try {
+  await page.locator('[data-view="settings"]').click();
+  await page.locator('[data-language-select]').selectOption('en');
+  await page.waitForFunction(() => document.documentElement.lang === 'en' && !document.querySelector('[data-high-contrast]').disabled);
+  await page.locator('[data-clear-data="allData"]').click();
+  assert.ok(await page.locator('[data-clear-cancel]').evaluate(el => el === document.activeElement));
+  const copy = await page.locator('#clear-description').innerText();
+  for (const word of ['settings', 'logs', 'backups', 'restart', 'disabled']) assert.ok(copy.includes(word), copy);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => window.featureFixture.calls.filter(c => c.command === 'clear_user_data').length), 0);
+  await page.evaluate(() => window.featureFixture.setDatabaseError(true));
+  await page.waitForFunction(() => document.querySelector('[data-clear-data="tasks"]').disabled);
+  assert.equal(await page.locator('[data-clear-data="allData"]').isDisabled(), false);
+  await page.locator('[data-clear-data="allData"]').click();
+  assert.deepEqual((await new AxeBuilder({ page }).analyze()).violations.map(v => v.id), []);
+  await page.evaluate(() => window.featureFixture.setResetError(true));
+  await page.locator('[data-clear-dialog] button[type="submit"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-clear-error]').textContent.includes('Could not prepare'));
+  assert.equal(await page.evaluate(() => window.featureFixture.resetRequested), false);
+  assert.equal(await page.locator('[data-clear-dialog] button[type="submit"]').isDisabled(), false);
+  await page.evaluate(() => window.featureFixture.setResetError(false));
+  await page.locator('[data-clear-dialog] button[type="submit"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-clear-status]').textContent === 'Restarting…');
+  assert.equal(await page.evaluate(() => window.featureFixture.resetRequested), true);
+  assert.equal(await page.locator('[data-clear-error]').innerText(), '');
+  assert.equal(await page.locator('[data-clear-dialog] button[type="submit"]').isDisabled(), true);
+  assert.deepEqual(errors, []);
+ } finally { await context.close(); }
+});

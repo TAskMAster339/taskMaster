@@ -96,6 +96,8 @@ impl TaskStore {
         if matches!(mode, ClearMode::AllData) {
             tx.execute("DELETE FROM timers", [])
                 .map_err(|_| AppError::storage())?;
+            tx.execute_batch("DELETE FROM keyboard_shortcuts; UPDATE preferences SET reminder_minutes=15,archive_hours=24 WHERE id=1;")
+                .map_err(|_| AppError::storage())?;
         }
         tx.commit().map_err(|_| AppError::storage())?;
         if matches!(mode, ClearMode::AllData) {
@@ -306,13 +308,16 @@ mod tests {
     use super::*;
     use crate::tasks::TaskStatus;
     #[test]
-    fn clear_data_preserves_settings_and_optional_timers() {
+    fn clear_tasks_preserves_settings_but_full_reset_restores_defaults() {
         for mode in [ClearMode::Tasks, ClearMode::AllData] {
             let store = TaskStore::in_memory().unwrap();
             let task = store.create_task("Task").unwrap();
             store.delete_task_at(&task.id, task.created_at).unwrap();
             store.create_timer("Timer", 60, 1000).unwrap();
             store.set_preferences(30, 48).unwrap();
+            store
+                .set_shortcut("new_task", "Ctrl+Alt+N", "Ctrl+Alt+Space")
+                .unwrap();
             let shortcuts = store.shortcuts().unwrap();
             store.clear_data(mode).unwrap();
             store.clear_data(mode).unwrap();
@@ -334,8 +339,23 @@ mod tests {
                     0
                 }
             );
-            assert_eq!(store.preferences().unwrap().reminder_minutes, 30);
-            assert_eq!(store.shortcuts().unwrap(), shortcuts);
+            let full_reset = matches!(mode, ClearMode::AllData);
+            assert_eq!(
+                store.preferences().unwrap().reminder_minutes,
+                if full_reset { 15 } else { 30 }
+            );
+            assert_eq!(
+                store.preferences().unwrap().archive_hours,
+                if full_reset { 24 } else { 48 }
+            );
+            assert_eq!(
+                store.shortcuts().unwrap(),
+                if full_reset {
+                    crate::shortcuts::defaults()
+                } else {
+                    shortcuts
+                }
+            );
         }
     }
     #[test]

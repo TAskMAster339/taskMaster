@@ -3,6 +3,7 @@ mod desktop;
 mod diagnostics;
 mod notifications;
 mod presentation;
+mod reset;
 mod shortcuts;
 mod storage;
 mod tasks;
@@ -148,6 +149,21 @@ fn clear_user_data(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), AppError> {
+    if matches!(mode, deletions::ClearMode::AllData) {
+        // Disable the OS registration before scheduling destructive cleanup. On failure
+        // the request is not created and the app can still show an actionable error.
+        desktop::set_autostart_enabled(false, app.clone())?;
+        reset::request(&app.path().app_data_dir().map_err(|_| AppError::storage())?).map_err(
+            |_| AppError {
+                code: "reset_error",
+                message:
+                    "Не удалось подготовить полный сброс. Данные не удалены. Повторите попытку."
+                        .into(),
+            },
+        )?;
+        app.request_restart();
+        return Ok(());
+    }
     with_store(&state, |store| store.clear_data(mode))?;
     let _ = app.emit("data-cleared", mode);
     let _ = app.emit("tasks-changed", ());
@@ -1091,12 +1107,27 @@ pub fn run() {
         }))
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
-            diagnostics::initialize(&directory.join("logs"));
+            // No WebView, SQLite handle or diagnostic log may be open during cleanup.
+            let reset_completed = match reset::execute_pending(
+                &app.config().identifier, &directory,
+                &app.path().app_local_data_dir()?, &app.path().app_cache_dir()?,
+            ) {
+                Ok(completed) => completed,
+                Err(error) => {
+                    use tauri_plugin_dialog::DialogExt;
+                    eprintln!("Factory reset failed: {error}");
+                    let handle = app.handle().clone();
+                    app.dialog().message(presentation::text("Полный сброс не завершён. Закройте другие экземпляры приложения, проверьте доступ к папкам данных и запустите taskMaster снова."))
+                        .title("taskMaster").show(move |_| handle.exit(1));
+                    return Ok(());
+                }
+            };
             fs::create_dir_all(&directory)?;
+            diagnostics::initialize(&directory.join("logs"));
             presentation::initialize(app.handle(), &directory);
             let store = open_store(directory.clone());
             let warning = match &store {
-                Ok(store) => {
+                Ok(store) if !reset_completed => {
                     let day: Result<String, _> =
                         store
                             .connection
@@ -1108,6 +1139,7 @@ pub fn run() {
                         .err()
                         .map(|error| error.message)
                 }
+                Ok(_) => None,
                 Err(_) => {
                     Some("Рабочая база недоступна. Восстановите данные из резервной копии.".into())
                 }
@@ -1161,6 +1193,9 @@ pub fn run() {
                     format!("Не удалось зарегистрировать {shortcut}."),
                 );
             }
+            let main_config = app.config().app.windows.iter().find(|window| window.label == "main")
+                .ok_or_else(|| std::io::Error::other("main window configuration missing"))?;
+            WebviewWindowBuilder::from_config(app, main_config)?.build()?;
             start_reminder_scheduler(app.handle().clone());
             register_notification_actions(app.handle());
 

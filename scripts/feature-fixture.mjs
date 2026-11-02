@@ -11,6 +11,8 @@ let timers = [{ id: 'fixture-timer', name: 'User timer', durationSeconds: 90, re
 let display = JSON.parse(localStorage.getItem('fixture.display') || '{"language":"ja","highContrast":false}');
 let reminderError = false;
 let displayError = false;
+let databaseError = false;
+let resetError = false;
 const calls = [];
 mockWindows(query.get('window') === 'overlay' ? 'overlay' : 'main');
 mockIPC(async (command, args) => {
@@ -27,12 +29,14 @@ mockIPC(async (command, args) => {
     case 'get_autostart_enabled': return false;
     case 'get_app_version': return 'fixture';
     case 'get_diagnostics_warning': return null;
-    case 'get_backup_status': return { directory: 'fixture', warning: null, databaseAvailable: true, hasDailyCopy: false };
+    case 'get_backup_status': return { directory: 'fixture', warning: null, databaseAvailable: !databaseError, hasDailyCopy: false };
     case 'get_notification_status': return { canTest: true, message: 'Уведомления разрешены в Windows.', usesSystemIdentity: false };
     case 'list_deletion_undos': return [];
     case 'list_task_creation_times': return [now];
     case 'list_history_for_range': return { completed: [], archived: [] };
-    case 'list_tasks': return tasks;
+    case 'list_tasks':
+      if (databaseError) throw { code: 'storage_error', message: 'Не удалось открыть локальную базу данных.' };
+      return tasks;
     case 'get_next_task': return tasks[0] || null;
     case 'list_timers': return timers;
     case 'get_overlay_pinned': return false;
@@ -48,7 +52,11 @@ mockIPC(async (command, args) => {
     case 'reset_timer': timers[0].status = 'ready'; return;
     case 'open_about_link': return;
     case 'clear_user_data':
-      tasks = []; if (args.mode === 'allData') timers = [];
+      if (args.mode === 'allData') {
+        if (resetError) throw { code: 'reset_error', message: 'Не удалось подготовить полный сброс. Данные не удалены. Повторите попытку.' };
+        window.featureFixture.resetRequested = true; return;
+      }
+      tasks = [];
       await emit('data-cleared', args.mode); await emit('tasks-changed'); return;
     default: throw Error(`Unmocked command: ${command}`);
   }
@@ -56,6 +64,6 @@ mockIPC(async (command, args) => {
 window.addEventListener('storage', event => {
   if (event.key === 'fixture.display') { display = JSON.parse(event.newValue); void emit('display-settings-changed', display); }
 });
-window.featureFixture = { calls, setReminderError(value) { reminderError = value; }, setDisplayError(value) { displayError = value; }, async removeTask(id) { tasks = tasks.filter(task => task.id !== id); await emit('tasks-changed'); } };
+window.featureFixture = { calls, resetRequested: false, setResetError(value) { resetError = value; }, async setDatabaseError(value) { databaseError = value; await emit('tasks-changed'); }, setReminderError(value) { reminderError = value; }, setDisplayError(value) { displayError = value; }, async removeTask(id) { tasks = tasks.filter(task => task.id !== id); await emit('tasks-changed'); } };
 await import('../src/main.ts');
 window.featureFixture.ready = true;
