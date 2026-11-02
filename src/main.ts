@@ -1759,18 +1759,10 @@ void listen("timer-runtime-error", () => {
   timerError = "Не удалось сохранить состояние таймера.";
   if (activeView === "timers") render(true);
 });
-window.setInterval(async () => {
-  try {
-    const archived = await invoke<number>("archive_expired_tasks");
-    if (archived > 0) {
-      await refreshTasks();
-      if (activeView === "history") await refreshHistory();
-    }
-  } catch (error) {
-    errorMessage = backendMessage(error);
-    render();
-  }
-}, 60_000);
+void listen("archive-runtime-error", () => {
+  errorMessage = "Не удалось проверить срок задач. Перезапустите приложение.";
+  render();
+});
 window.setInterval(() => { if (activeView === "timers") void refreshTimers(false); }, 1_000);
 void listen("tasks-changed", () => { void refreshTasks(); void refreshDeletionUndos(); if (activeView === "history") void refreshHistory(); });
 void listen("overlay-open-today", () => {

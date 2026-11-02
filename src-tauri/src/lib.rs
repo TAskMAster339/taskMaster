@@ -700,22 +700,13 @@ fn start_reminder_scheduler(app: AppHandle) {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as i64;
-            // Give the 5-second polling window room, but treat longer gaps (including sleep)
-            // as missed instead of displaying stale notifications after wake.
-            if store
-                .mark_missed_reminders(now.saturating_sub(30_000))
-                .is_err()
-            {
-                let _ = app.emit("reminder-runtime-error", ());
-                diagnostics::record(diagnostics::Event::ReminderError, None);
-                continue;
-            }
-            let reminders = match store.take_due_reminders(now) {
-                Ok(reminders) => reminders,
+            // Maintenance runs in Rust even when the WebView is hidden or throttled.
+            let (archived, reminders) = match store.poll_reminders_at(now) {
+                Ok(result) => result,
                 Err(_) => {
                     diagnostics::record(diagnostics::Event::ReminderError, None);
                     let _ = app.emit("reminder-runtime-error", ());
-                    Vec::new()
+                    (0, Vec::new())
                 }
             };
             let finished_timers = match store.take_due_timers() {
@@ -727,6 +718,9 @@ fn start_reminder_scheduler(app: AppHandle) {
                 }
             };
             drop(guard);
+            if archived > 0 {
+                let _ = app.emit("tasks-changed", ());
+            }
             for reminder in reminders {
                 notify_reminder(&app, reminder);
             }
@@ -1190,10 +1184,24 @@ pub fn run() {
 
             if let Some(window) = app.get_webview_window("main") {
                 let close_window = window.clone();
+                let handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = close_window.hide();
+                    }
+                    if matches!(event, WindowEvent::Focused(true)) {
+                        match with_store(&handle.state::<AppState>(), |store| {
+                            store.archive_expired_tasks(tasks::now_millis())
+                        }) {
+                            Ok(count) if count > 0 => {
+                                let _ = handle.emit("tasks-changed", ());
+                            }
+                            Err(_) => {
+                                let _ = handle.emit("archive-runtime-error", ());
+                            }
+                            _ => {}
+                        }
                     }
                 });
             }

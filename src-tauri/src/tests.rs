@@ -659,3 +659,18 @@ fn custom_shortcuts_persist_and_reject_conflicts_without_overwriting() {
         "new_task"
     );
 }
+#[test]
+fn background_poll_archives_expired_tasks_before_sending_reminders() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Истекла в трее").unwrap();
+    let deadline = task.created_at + 86_400_000;
+    store
+        .set_reminder_at(&task.id, deadline, task.created_at)
+        .unwrap();
+    let (archived, reminders) = store.poll_reminders_at(deadline).unwrap();
+    assert_eq!(archived, 1);
+    assert!(reminders.is_empty());
+    assert_eq!(store.list_tasks().unwrap()[0].status, TaskStatus::Archived);
+    assert_eq!(store.poll_reminders_at(deadline + 1).unwrap().0, 0);
+    assert_eq!(store.count_archive_events().unwrap(), 1);
+}

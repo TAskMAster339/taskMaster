@@ -822,6 +822,13 @@ impl TaskStore {
         Ok(reminders)
     }
 
+    pub fn poll_reminders_at(&self, now: i64) -> Result<(usize, Vec<DueReminder>), AppError> {
+        let archived = self.archive_expired_tasks(now)?;
+        self.clear_non_active_reminders(now)?;
+        self.mark_missed_reminders(now.saturating_sub(30_000))?;
+        Ok((archived, self.take_due_reminders(now)?))
+    }
+
     pub fn mark_missed_reminders(&self, now: i64) -> Result<usize, AppError> {
         let transaction = self
             .connection
@@ -1180,7 +1187,9 @@ impl TaskStore {
             ).map_err(|_| AppError::storage())?;
             record_event(&transaction, id, "archived", now, &serde_json::json!({}))?;
         }
-        compact_active_positions(&transaction)?;
+        if !ids.is_empty() {
+            compact_active_positions(&transaction)?;
+        }
         transaction.commit().map_err(|_| AppError::storage())?;
         Ok(ids.len())
     }
