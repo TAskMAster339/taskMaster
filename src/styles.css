@@ -426,6 +426,7 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 
 .task-delete { display: grid; place-items: center; width: 44px; min-height: 44px; flex: 0 0 44px; padding: 10px; border: 1px solid transparent; color: var(--muted); background: transparent; cursor: pointer; }
 .task-delete svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.task-list > .task-row { content-visibility: auto; contain-intrinsic-size: auto 64px; }
 .task-delete:hover { color: var(--obi); border-color: var(--obi); }
 .undo-notices { position: fixed; z-index: 30; right: 16px; bottom: 16px; width: min(420px, calc(100vw - 32px)); max-height: 45vh; overflow-y: auto; scrollbar-color: var(--obi) var(--surface-soft); scrollbar-width: thin; }
 .undo-notices ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }

@@ -1,4 +1,5 @@
 import { defaultShortcuts, shortcutLabels, keyboardCombination, displayShortcut, type ShortcutAction } from "./shortcuts";
+import { appendInBatches } from "./batches";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -54,6 +55,7 @@ let errorMessage = "";
 let loadFailed = false;
 let editingTaskId: string | null = null;
 let mouseDragActive = false;
+let taskPointerHeld = false;
 const taskAnimationLocks = new Set<string>();
 const taskAnimationErrors: string[] = [];
 let announcement = "";
@@ -70,6 +72,14 @@ yesterday.setDate(yesterday.getDate() - 1);
 let selectedHistoryDate = toLocalDateString(yesterday);
 let calendarMonth = monthStart(parseLocalDate(selectedHistoryDate));
 const enteringTaskIds = new Set<string>();
+let cancelListAppend: () => void = () => {};
+let pendingTaskFocusId: string | null = null;
+
+function focusTaskWhenRendered(id: string): void {
+  const row = root.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(id)}"]`);
+  if (row) { row.focus(); pendingTaskFocusId = null; }
+  else pendingTaskFocusId = id;
+}
 let reminderEditingTaskId: string | null = null;
 let reminderDialogError = "";
 let highlightedReminderTaskId: string | null = null;
@@ -363,16 +373,17 @@ function captureTaskPositions(): Map<string, string> {
   const positions = new Map<string, string>();
   root.querySelectorAll<HTMLLIElement>('.task-row[data-reorderable="true"]').forEach((row) => {
     const id = row.dataset.taskId;
-    const label = row.querySelector<HTMLElement>(".task-position");
-    const oldPosition = label?.classList.contains("is-changing") ? label.querySelector<HTMLElement>(".position-old")?.textContent : "";
+    const label = row.firstElementChild as HTMLElement | null;
+    const oldPosition = label?.classList.contains("is-changing") ? label.firstElementChild?.textContent : "";
     const position = oldPosition || label?.dataset.position;
     if (id && position) positions.set(id, position);
   });
   return positions;
 }
 
-function animatePositionChanges(previous: Map<string, string>): void {
-  root.querySelectorAll<HTMLLIElement>('.task-row[data-reorderable="true"]').forEach((row) => {
+function animatePositionChanges(previous: Map<string, string>, scope: ParentNode = root): void {
+  if (!previous.size) return;
+  scope.querySelectorAll<HTMLLIElement>('.task-row[data-reorderable="true"]').forEach((row) => {
     const oldPosition = previous.get(row.dataset.taskId ?? "");
     const position = row.querySelector<HTMLElement>(".task-position");
     if (!oldPosition || !position || oldPosition === position.dataset.position) return;
@@ -394,7 +405,7 @@ function animatePositionChanges(previous: Map<string, string>): void {
 function animateEnteringTasks(): void {
   enteringTaskIds.forEach((id) => {
     const row = root.querySelector<HTMLLIElement>(`.task-row[data-task-id="${CSS.escape(id)}"]`);
-    if (!row) return;
+    if (!row || row.classList.contains("is-entering")) return;
     row.classList.add("is-entering");
     const finish = (): void => {
       row.classList.remove("is-entering");
@@ -836,13 +847,16 @@ function renderTimers(): void {
 function render(allowDuringAnimation = false): void {
   if (mouseDragActive) return;
   if (taskAnimationLocks.size > 0 && !allowDuringAnimation) return;
+  cancelListAppend();
+  cancelListAppend = () => {};
+  if (activeView !== "today" && activeView !== "completed") pendingTaskFocusId = null;
   if (activeView === "settings") { renderSettings(); return; }
   if (activeView === "timers") { renderTimers(); return; }
   if (timerAnimationFrame !== null) {
     cancelAnimationFrame(timerAnimationFrame);
     timerAnimationFrame = null;
   }
-  const previousPositions = captureTaskPositions();
+  const previousPositions = root.querySelector("main")?.id === activeView ? captureTaskPositions() : new Map<string, string>();
   const active = activeTasks();
   const completedToday = completedTodayTasks();
   const showingToday = activeView === "today";
@@ -857,7 +871,7 @@ function render(allowDuringAnimation = false): void {
     : loading
     ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем очередь…</span></div>`
     : visibleTasks.length
-      ? `<ol class="task-list ${showingToday ? "" : "completed-list"}" aria-label="${showingToday ? "Очередь задач" : "Выполненные сегодня задачи"}">${visibleTasks.map((task, index) => renderTask(task, index, !showingToday)).join("")}</ol>`
+      ? `<ol class="task-list ${showingToday ? "" : "completed-list"}" aria-label="${showingToday ? "Очередь задач" : "Выполненные сегодня задачи"}">${visibleTasks.slice(0, 32).map((task, index) => renderTask(task, index, !showingToday)).join("")}</ol>`
       : loadFailed
         ? `<div class="empty-state load-error-state">
              <span class="empty-mark" aria-hidden="true">!</span>
@@ -921,7 +935,28 @@ function render(allowDuringAnimation = false): void {
 
   bindEvents();
   animatePositionChanges(previousPositions);
+  const list = root.querySelector<HTMLOListElement>(".task-list");
+  const firstPending = list?.children.length ?? 0;
+  if (list && visibleTasks.length > firstPending && !showingHistory) {
+    const schedule = (callback: () => void): void => {
+      requestAnimationFrame(() => { if (mouseDragActive || taskPointerHeld) schedule(callback); else callback(); });
+    };
+    cancelListAppend = appendInBatches(visibleTasks.slice(firstPending), (batch, start) => {
+      const template = document.createElement("template");
+      template.innerHTML = batch.map((task, index) => renderTask(task, start + firstPending + index, !showingToday)).join("");
+      bindEvents(template.content);
+      animatePositionChanges(previousPositions, template.content);
+      const rename = template.content.querySelector<HTMLInputElement>(".rename-input");
+      const entering = batch.find((task) => enteringTaskIds.has(task.id));
+      list.append(template.content);
+      if (rename) { rename.focus(); rename.select(); }
+      if (pendingTaskFocusId && batch.some((task) => task.id === pendingTaskFocusId)) focusTaskWhenRendered(pendingTaskFocusId);
+      if (entering) list.querySelector<HTMLElement>(`[data-task-id="${entering.id}"]`)?.scrollIntoView({ block: "nearest" });
+      animateEnteringTasks();
+    }, schedule);
+  }
   animateEnteringTasks();
+  if (pendingTaskFocusId && root.querySelector(`[data-task-id="${CSS.escape(pendingTaskFocusId)}"]`)) focusTaskWhenRendered(pendingTaskFocusId);
   const reminderDialog = root.querySelector<HTMLDialogElement>("[data-reminder-dialog]");
   if (reminderDialog && !reminderDialog.open) reminderDialog.showModal();
   const shortcutDialog = root.querySelector<HTMLDialogElement>("[data-overlay-shortcut-dialog]");
@@ -1010,9 +1045,9 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
   }
 }
 
-function bindEvents(): void {
-  root.querySelectorAll<HTMLButtonElement>("[data-purge-task]").forEach((button) => button.addEventListener("click", () => { if (button.dataset.purgeTask) void openPermanentDeletion(button.dataset.purgeTask); }));
-  root.querySelectorAll<HTMLButtonElement>("[data-delete-task]").forEach((button) => button.addEventListener("click", async () => {
+function bindEvents(scope: ParentNode = root): void {
+  scope.querySelectorAll<HTMLButtonElement>("[data-purge-task]").forEach((button) => button.addEventListener("click", () => { if (button.dataset.purgeTask) void openPermanentDeletion(button.dataset.purgeTask); }));
+  scope.querySelectorAll<HTMLButtonElement>("[data-delete-task]").forEach((button) => button.addEventListener("click", async () => {
     const id = button.dataset.deleteTask; if (!id || saving || taskAnimationLocks.has(id)) return;
     const deleted = await perform(async () => {
       const undo = await invoke<UndoDeletion>("delete_task", { id });
@@ -1020,12 +1055,12 @@ function bindEvents(): void {
     });
     if (deleted) { await refreshDeletionUndos(); if (activeView === "history") await refreshHistory(); }
   }));
-  bindNotificationControls();
-  root.querySelectorAll<HTMLButtonElement>("[data-add-timer]").forEach((button) => button.addEventListener("click", () => { timerError = ""; timerDialogOpen = true; render(true); }));
-  root.querySelector<HTMLButtonElement>("[data-close-timer]")?.addEventListener("click", () => { timerDialogOpen = false; timerError = ""; render(true); });
-  root.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) { timerDialogOpen = false; render(true); } });
-  root.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("cancel", () => { timerDialogOpen = false; });
-  root.querySelector<HTMLFormElement>("[data-timer-form]")?.addEventListener("submit", async (event) => {
+  if (scope === root) bindNotificationControls();
+  scope.querySelectorAll<HTMLButtonElement>("[data-add-timer]").forEach((button) => button.addEventListener("click", () => { timerError = ""; timerDialogOpen = true; render(true); }));
+  scope.querySelector<HTMLButtonElement>("[data-close-timer]")?.addEventListener("click", () => { timerDialogOpen = false; timerError = ""; render(true); });
+  scope.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) { timerDialogOpen = false; render(true); } });
+  scope.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("cancel", () => { timerDialogOpen = false; });
+  scope.querySelector<HTMLFormElement>("[data-timer-form]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const name = String(new FormData(form).get("name") ?? "").trim();
@@ -1037,7 +1072,7 @@ function bindEvents(): void {
       await refreshTimers();
     } catch (error) { timerError = backendMessage(error); render(true); }
   });
-  root.querySelectorAll<HTMLButtonElement>("[data-timer-action]").forEach((button) => button.addEventListener("click", async () => {
+  scope.querySelectorAll<HTMLButtonElement>("[data-timer-action]").forEach((button) => button.addEventListener("click", async () => {
     const id = button.dataset.timerId; const action = button.dataset.timerAction;
     if (!id || !action) return;
     try {
@@ -1052,26 +1087,26 @@ function bindEvents(): void {
       await refreshTimers();
     } catch (error) { timerError = backendMessage(error); render(true); }
   }));
-  root.querySelectorAll<HTMLButtonElement>("[data-timer-fullscreen]").forEach((button) => button.addEventListener("click", () => {
+  scope.querySelectorAll<HTMLButtonElement>("[data-timer-fullscreen]").forEach((button) => button.addEventListener("click", () => {
     fullscreenTimerId = button.dataset.timerFullscreen ?? null;
     render(true);
   }));
-  root.querySelector<HTMLButtonElement>("[data-exit-fullscreen]")?.addEventListener("click", () => { fullscreenTimerId = null; render(true); });
-  root.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", async () => {
-    try { preferences = await invoke<typeof preferences>("get_preferences"); preferencesReady = true; }
+  scope.querySelector<HTMLButtonElement>("[data-exit-fullscreen]")?.addEventListener("click", () => { fullscreenTimerId = null; render(true); });
+  scope.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", async () => {
+      try { preferences = await invoke<typeof preferences>("get_preferences"); preferencesReady = true; }
     catch (error) { errorMessage = backendMessage(error); render(true); return; }
     reminderEditingTaskId = button.dataset.editReminder ?? null;
     reminderDialogError = "";
     render(true);
   }));
-  root.querySelector<HTMLButtonElement>("[data-close-reminder]")?.addEventListener("click", () => { reminderEditingTaskId = null; render(true); });
-  root.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("click", (event) => {
+  scope.querySelector<HTMLButtonElement>("[data-close-reminder]")?.addEventListener("click", () => { reminderEditingTaskId = null; render(true); });
+  scope.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("click", (event) => {
     if (event.target === event.currentTarget) { reminderEditingTaskId = null; render(true); }
   });
-  root.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("cancel", () => {
+  scope.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("cancel", () => {
     reminderEditingTaskId = null;
   });
-  root.querySelector<HTMLFormElement>("[data-reminder-form]")?.addEventListener("submit", async (event) => {
+  scope.querySelector<HTMLFormElement>("[data-reminder-form]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const id = form.dataset.reminderForm;
@@ -1088,7 +1123,7 @@ function bindEvents(): void {
       render(true);
     }
   });
-  root.querySelector<HTMLButtonElement>("[data-clear-reminder]")?.addEventListener("click", async (event) => {
+  scope.querySelector<HTMLButtonElement>("[data-clear-reminder]")?.addEventListener("click", async (event) => {
     const id = (event.currentTarget as HTMLButtonElement).dataset.clearReminder;
     if (!id) return;
     try {
@@ -1097,7 +1132,7 @@ function bindEvents(): void {
       await refreshTasks();
     } catch (error) { reminderDialogError = backendMessage(error); render(true); }
   });
-  root.querySelectorAll<HTMLAnchorElement>("[data-view]").forEach((link) => {
+  scope.querySelectorAll<HTMLAnchorElement>("[data-view]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       const nextView = link.dataset.view as View | undefined;
@@ -1110,7 +1145,7 @@ function bindEvents(): void {
     });
   });
 
-  root.querySelectorAll<HTMLButtonElement>("[data-calendar-date]").forEach((button) => {
+  scope.querySelectorAll<HTMLButtonElement>("[data-calendar-date]").forEach((button) => {
     button.addEventListener("click", () => {
       const value = button.dataset.calendarDate;
       if (!value) return;
@@ -1120,7 +1155,7 @@ function bindEvents(): void {
       void refreshHistory();
     });
   });
-  root.querySelectorAll<HTMLButtonElement>("[data-calendar-shift]").forEach((button) => {
+  scope.querySelectorAll<HTMLButtonElement>("[data-calendar-shift]").forEach((button) => {
     button.addEventListener("click", () => {
       const shift = Number(button.dataset.calendarShift);
       const target = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + shift, 1);
@@ -1131,7 +1166,7 @@ function bindEvents(): void {
       void refreshHistory();
     });
   });
-  root.querySelectorAll<HTMLButtonElement>("[data-restore-task]").forEach((button) => {
+  scope.querySelectorAll<HTMLButtonElement>("[data-restore-task]").forEach((button) => {
     button.addEventListener("click", async () => {
       const id = button.dataset.restoreTask;
       if (!id || saving) return;
@@ -1140,13 +1175,13 @@ function bindEvents(): void {
     });
   });
 
-  root.querySelector<HTMLButtonElement>("[data-toggle-overlay]")?.addEventListener("click", async () => {
+  scope.querySelector<HTMLButtonElement>("[data-toggle-overlay]")?.addEventListener("click", async () => {
     try { await invoke("toggle_task_overlay"); }
     catch (error) { errorMessage = backendMessage(error); render(true); }
   });
-  root.querySelector<HTMLButtonElement>("[data-open-overlay-shortcut]")?.addEventListener("click", () => { overlayShortcutError = ""; overlayShortcutDialogOpen = true; render(true); });
-  root.querySelector<HTMLButtonElement>("[data-close-overlay-shortcut]")?.addEventListener("click", () => { overlayShortcutDialogOpen = false; overlayShortcutError = ""; render(true); });
-  root.querySelector<HTMLFormElement>("[data-overlay-shortcut-form]")?.addEventListener("submit", async (event) => {
+  scope.querySelector<HTMLButtonElement>("[data-open-overlay-shortcut]")?.addEventListener("click", () => { overlayShortcutError = ""; overlayShortcutDialogOpen = true; render(true); });
+  scope.querySelector<HTMLButtonElement>("[data-close-overlay-shortcut]")?.addEventListener("click", () => { overlayShortcutDialogOpen = false; overlayShortcutError = ""; render(true); });
+  scope.querySelector<HTMLFormElement>("[data-overlay-shortcut-form]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const shortcut = String(new FormData(event.currentTarget as HTMLFormElement).get("shortcut") ?? "").trim();
     try {
@@ -1162,14 +1197,14 @@ function bindEvents(): void {
     }
   });
 
-  root.querySelector<HTMLButtonElement>("[data-retry-load]")?.addEventListener("click", () => {
+  scope.querySelector<HTMLButtonElement>("[data-retry-load]")?.addEventListener("click", () => {
     loading = true;
     errorMessage = "";
     render();
     void refreshTasks();
   });
 
-  root.querySelector<HTMLFormElement>("#quick-add-form")?.addEventListener("submit", (event) => {
+  scope.querySelector<HTMLFormElement>("#quick-add-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const input = root.querySelector<HTMLInputElement>("#new-task-title");
     const title = input?.value.trim() ?? "";
@@ -1182,7 +1217,7 @@ function bindEvents(): void {
     void createTask(title);
   });
 
-  root.querySelectorAll<HTMLButtonElement>("[data-toggle-task]").forEach((button) => {
+  scope.querySelectorAll<HTMLButtonElement>("[data-toggle-task]").forEach((button) => {
     button.addEventListener("click", () => {
       if (saving) return;
       const task = tasks.find((item) => item.id === button.dataset.toggleTask);
@@ -1197,7 +1232,7 @@ function bindEvents(): void {
     });
   });
 
-  root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
+  scope.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.querySelector<HTMLElement>(".task-content")?.addEventListener("dblclick", () => {
       if (saving || taskAnimationLocks.has(row.dataset.taskId ?? "") || editingTaskId === row.dataset.taskId) return;
       editingTaskId = row.dataset.taskId ?? null;
@@ -1206,7 +1241,7 @@ function bindEvents(): void {
     });
   });
 
-  root.querySelectorAll<HTMLFormElement>("[data-rename-form]").forEach((form) => {
+  scope.querySelectorAll<HTMLFormElement>("[data-rename-form]").forEach((form) => {
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const taskId = form.dataset.renameForm;
@@ -1229,9 +1264,10 @@ function bindEvents(): void {
     });
   });
 
-  root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
+  scope.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("pointerdown", (event) => {
       if (saving || mouseDragActive || taskAnimationLocks.size || event.button !== 0 || (event.target as HTMLElement).closest("button, input, a")) return;
+      taskPointerHeld = true;
       const list = row.closest<HTMLOListElement>(".task-list")!;
       const original = [...list.querySelectorAll<HTMLLIElement>(".task-row")];
       const originalIds = original.map((item) => item.dataset.taskId!);
@@ -1296,6 +1332,7 @@ function bindEvents(): void {
         tick();
       }, 180);
       const finish = (cancelled = false): void => {
+        taskPointerHeld = false;
         clearTimeout(hold); cancelAnimationFrame(frame);
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
@@ -1307,8 +1344,8 @@ function bindEvents(): void {
         document.body.classList.remove("is-task-dragging");
         const didDrag = mouseDragActive;
         mouseDragActive = false;
-        const ids = ordered.map((item) => item.dataset.taskId!);
-        if (!cancelled && didDrag && ids.some((id, index) => id !== originalIds[index])) void saveOrder(ids, ids.indexOf(row.dataset.taskId!));
+        const ids = [...ordered.map((item) => item.dataset.taskId!), ...activeTasks().slice(originalIds.length).map((task) => task.id)];
+        if (!cancelled && didDrag && ids.slice(0, originalIds.length).some((id, index) => id !== originalIds[index])) void saveOrder(ids, ids.indexOf(row.dataset.taskId!));
         else { ordered = [...original]; arrange(); }
       };
       const move = (e: PointerEvent): void => { x = e.clientX; y = e.clientY; if (preview) { e.preventDefault(); window.getSelection()?.removeAllRanges(); } };
@@ -1335,7 +1372,7 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
     announcement = `Задача перемещена на позицию ${index + 1} из ${activeTasks().length}.`;
   }
   render();
-  if (index >= 0) root.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(movedId)}"]`)?.focus();
+  if (index >= 0) focusTaskWhenRendered(movedId);
 }
 
 function bindOverlayTimerDrag(card: HTMLElement, pinned: boolean, reorder: (ids: string[]) => void, setDragging: (value: boolean) => void): void {

@@ -674,3 +674,43 @@ fn background_poll_archives_expired_tasks_before_sending_reminders() {
     assert_eq!(store.poll_reminders_at(deadline + 1).unwrap().0, 0);
     assert_eq!(store.count_archive_events().unwrap(), 1);
 }
+#[test]
+#[ignore = "manual performance check on a disposable database"]
+fn benchmark_queue_of_5000_tasks() {
+    use std::time::Instant;
+    let directory = std::env::temp_dir().join(format!("taskmaster-benchmark-{}", Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    {
+        let store = TaskStore::open(directory.join("test.sqlite3")).unwrap();
+        let now = super::tasks::now_millis();
+        store.connection.execute("WITH RECURSIVE n(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM n WHERE x<4999) INSERT INTO tasks(id,title,status,position,created_at,updated_at) SELECT printf('task-%d',x),'Проверка производительности','active',x,?1,?1 FROM n",[now]).unwrap();
+        let start = Instant::now();
+        let tasks = store.list_tasks().unwrap();
+        eprintln!("5000: list = {:?}", start.elapsed());
+        assert_eq!(tasks.len(), 5000);
+        let start = Instant::now();
+        store.rename_task(&tasks[0].id, "Новое название").unwrap();
+        eprintln!("5000: rename = {:?}", start.elapsed());
+        let mut ids: Vec<_> = tasks.iter().map(|t| t.id.clone()).collect();
+        ids.swap(0, 1);
+        let start = Instant::now();
+        store.reorder_tasks(&ids).unwrap();
+        eprintln!("5000: adjacent reorder = {:?}", start.elapsed());
+        let start = Instant::now();
+        store.complete_task(&ids[0]).unwrap();
+        eprintln!("5000: complete = {:?}", start.elapsed());
+        let start = Instant::now();
+        store.poll_reminders_at(now + 1000).unwrap();
+        eprintln!("5000: background poll = {:?}", start.elapsed());
+        assert_eq!(
+            store
+                .list_tasks()
+                .unwrap()
+                .iter()
+                .filter(|t| t.status == TaskStatus::Active)
+                .count(),
+            4999
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
