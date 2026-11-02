@@ -22,6 +22,8 @@ tauri = { version = "=2.12.5", features = ["tray-icon"] }
 tauri-plugin-single-instance = "=2.5.3"
 tauri-plugin-notification = "=2.8.0"
 tauri-plugin-dialog = "=2.8.4"
+# Keep Windows registration scoped to the current user.
+tauri-plugin-autostart = "=2.5.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
@@ -30,6 +32,9 @@ tauri-plugin-global-shortcut = "=2.4.1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[target.'cfg(windows)'.dependencies]
+windows-registry = "=0.6.1"
+
 [profile.release]
 codegen-units = 1
 lto = true

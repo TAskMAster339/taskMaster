@@ -1,3 +1,4 @@
+mod desktop;
 mod shortcuts;
 mod storage;
 mod tasks;
@@ -936,6 +937,11 @@ fn resize_overlay_for_timers(timer_count: usize, app: AppHandle) -> Result<usize
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("taskMaster")
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -1083,6 +1089,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop::get_autostart_enabled,
+            desktop::set_autostart_enabled,
             get_backup_status,
             create_database_backup,
             prepare_database_restore,

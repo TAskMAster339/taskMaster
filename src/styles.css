@@ -411,3 +411,7 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .backup-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; }
 .backup-summary dd { margin: 0; font-variant-numeric: tabular-nums; }
 .backup-confirm { max-height: calc(100vh - 32px); overflow-y: auto; }
+
+.settings-section .settings-check { display: flex; gap: 12px; align-items: center; min-height: 44px; margin: 0; cursor: pointer; }
+.settings-section .settings-check input { width: 22px; height: 22px; min-height: 22px; flex: 0 0 22px; margin: 0; accent-color: var(--obi); }
+.settings-check:has(input:disabled) { cursor: default; }

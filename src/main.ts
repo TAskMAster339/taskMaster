@@ -77,6 +77,46 @@ let timerAnimationFrame: number | null = null;
 let timerDialogOpen = false;
 let timerError = "";
 let fullscreenTimerId: string | null = null;
+let autostartEnabled: boolean | null = null;
+let autostartBusy = false;
+let autostartMessage = "";
+function updateAutostartControls(): void {
+  const checkbox = root.querySelector<HTMLInputElement>("[data-autostart]");
+  if (checkbox) { checkbox.checked = autostartEnabled === true; checkbox.disabled = autostartBusy || autostartEnabled === null; }
+  const status = root.querySelector<HTMLElement>("[data-autostart-status]");
+  if (status) status.textContent = autostartMessage;
+  const retry = root.querySelector<HTMLButtonElement>("[data-autostart-retry]");
+  if (retry) { retry.hidden = autostartEnabled !== null; retry.disabled = autostartBusy; }
+}
+async function refreshAutostart(): Promise<void> {
+  if (autostartBusy) return;
+  autostartBusy = true; updateAutostartControls();
+  try { autostartEnabled = await invoke<boolean>("get_autostart_enabled"); autostartMessage = ""; }
+  catch (error) { autostartEnabled = null; autostartMessage = backendMessage(error); }
+  finally { autostartBusy = false; updateAutostartControls(); }
+}
+function renderAutostartSettings(): string {
+  return `<section class="settings-section" aria-labelledby="startup-heading"><h2 id="startup-heading">Запуск</h2>
+    <label class="settings-check"><input type="checkbox" data-autostart ${autostartEnabled ? "checked" : ""} ${autostartBusy || autostartEnabled === null ? "disabled" : ""}/><span>Запускать с Windows</span></label>
+    <p role="status" data-autostart-status>${escapeHtml(autostartMessage)}</p>
+    <button class="retry-button" type="button" data-autostart-retry ${autostartEnabled === null ? "" : "hidden"}>Повторить проверку</button>
+  </section>`;
+}
+function bindAutostartSettings(): void {
+  root.querySelector<HTMLButtonElement>("[data-autostart-retry]")?.addEventListener("click", () => { void refreshAutostart(); });
+  root.querySelector<HTMLInputElement>("[data-autostart]")?.addEventListener("change", async (event) => {
+    const desired = (event.currentTarget as HTMLInputElement).checked;
+    if (autostartBusy) { updateAutostartControls(); return; }
+    autostartBusy = true; updateAutostartControls();
+    try { autostartEnabled = await invoke<boolean>("set_autostart_enabled", { enabled: desired }); autostartMessage = "Сохранено"; }
+    catch (error) {
+      autostartMessage = backendMessage(error);
+      try { autostartEnabled = await invoke<boolean>("get_autostart_enabled"); } catch { autostartEnabled = null; }
+    }
+    finally { autostartBusy = false; updateAutostartControls(); }
+  });
+}
+
 interface BackupStatus { directory: string; warning: string | null; databaseAvailable: boolean; hasDailyCopy: boolean; }
 interface RestorePreview { token: string; source: string; tasks: number; events: number; timers: number; }
 let backupStatus: BackupStatus | null = null;
@@ -570,6 +610,7 @@ function renderSettings(): void {
     <section class="settings-section" aria-labelledby="theme-heading"><h2 id="theme-heading">Оформление</h2><label for="settings-theme">Тема</label>
     <select id="settings-theme" data-theme-select>${themeOrder.map((value) => `<option value="${value}" ${theme === value ? "selected" : ""}>${themeLabels[value]}</option>`).join("")}</select>
     <p role="alert" data-settings-error></p></section>
+    ${renderAutostartSettings()}
     <section class="settings-section"><h2>Задачи</h2><form data-preferences-form>
       <label for="reminder-minutes">Время до напоминания, минуты</label><input id="reminder-minutes" name="reminderMinutes" type="number" min="1" max="1439" step="1" required value="${preferences.reminderMinutes}" ${preferencesReady ? "" : "disabled"}/>
       <label for="archive-hours">Архивировать через, часы</label><input id="archive-hours" name="archiveHours" type="number" min="1" max="8760" step="1" required value="${preferences.archiveHours}" ${preferencesReady ? "" : "disabled"}/>
@@ -590,6 +631,7 @@ function renderSettings(): void {
   </main></div>`;
   bindEvents();
   bindBackupSettings();
+  bindAutostartSettings();
   root.querySelectorAll<HTMLInputElement>("[data-shortcut-capture]").forEach((input) => {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Tab") return;
@@ -1503,6 +1545,8 @@ void listen("reminder-runtime-error", () => {
   errorMessage = "Не удалось обработать напоминание. Перезапустите приложение.";
   render(true);
 });
+void refreshAutostart();
+window.addEventListener("focus", () => { if (activeView === "settings") void refreshAutostart(); });
 void refreshBackupStatus();
 void invoke<typeof preferences>("get_preferences").then((value) => { preferences = value; preferencesReady = true; if (activeView === "settings") render(true); }).catch((error) => { preferencesError = backendMessage(error); if (activeView === "settings") render(true); });
 render();
