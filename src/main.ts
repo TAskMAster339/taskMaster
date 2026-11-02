@@ -488,8 +488,8 @@ function renderTimers(): void {
   const focused = timers.find((timer) => timer.id === fullscreenTimerId);
   root.innerHTML = `<div class="app-shell ${focused ? "is-timer-fullscreen" : ""}">
     ${focused ? "" : `<aside class="sidebar" aria-label="taskMaster"><nav class="navigation" aria-label="Разделы">
-      <a class="nav-item" href="#today" data-view="today"><span class="nav-index">01</span>Сегодня</a>
-      <a class="nav-item" href="#completed" data-view="completed"><span class="nav-index">02</span>Выполнено</a>
+      <a class="nav-item" href="#today" data-view="today"><span class="nav-index">01</span>Сегодня<span class="nav-count">${activeTasks().length}</span></a>
+      <a class="nav-item" href="#completed" data-view="completed"><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedTodayTasks().length}</span></a>
       <a class="nav-item" href="#history" data-view="history"><span class="nav-index">03</span>История</a>
       <a class="nav-item is-current" href="#timers" data-view="timers" aria-current="page"><span class="nav-index">04</span>Таймеры</a>
     </nav><button class="theme-switch" type="button" data-theme-switch aria-label="Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить"><span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy"><span class="theme-label">${themeLabels[theme]}</span></span></button></aside>`}
@@ -1027,15 +1027,19 @@ async function renderOverlay(): Promise<void> {
   const visibleTimerIds = new Set<string>();
   const hiddenTimerIds = new Set<string>();
   let lastTimerCount = -1;
+  let loadingOverlay = false;
+  let shownTaskId: string | null = null;
   const enteringTimerIds = new Set<string>();
   const endingTimers = new Map<string, Timer>();
   const load = async (): Promise<void> => {
+    if (loadingOverlay) return;
+    loadingOverlay = true;
     try {
       const active = (await invoke<Task[]>("list_tasks")).filter((task) => task.status === "active").sort((a, b) => a.position - b.position);
       const allTimers = await invoke<Timer[]>("list_timers");
       theme = readTheme(); applyTheme();
       for (const timer of allTimers) if (timer.status === "running" && !hiddenTimerIds.has(timer.id)) visibleTimerIds.add(timer.id);
-      const runningTimers = allTimers.filter((timer) => visibleTimerIds.has(timer.id) && timer.status !== "finished");
+      const runningTimers = [...visibleTimerIds].map((id) => allTimers.find((timer) => timer.id === id)).filter((timer): timer is Timer => Boolean(timer && timer.status !== "finished"));
       const runningIds = new Set(runningTimers.map((timer) => timer.id));
       for (const timer of runningTimers) {
         if (!previousRunningIds.has(timer.id)) {
@@ -1053,7 +1057,7 @@ async function renderOverlay(): Promise<void> {
         }
       }
       previousRunningIds = runningIds;
-      const displayTimers = [...runningTimers, ...endingTimers.values()];
+      const displayTimers = [...visibleTimerIds].map((id) => endingTimers.get(id) ?? runningTimers.find((timer) => timer.id === id)).filter((timer): timer is Timer => Boolean(timer));
       if (displayTimers.length !== lastTimerCount) {
         lastTimerCount = displayTimers.length;
         void invoke<number>("resize_overlay_for_timers", { timerCount: displayTimers.length }).then((rows) => { document.documentElement.style.setProperty("--overlay-rows", String(rows)); });
@@ -1075,10 +1079,19 @@ async function renderOverlay(): Promise<void> {
         }
         return;
       }
+      const taskChanged = shownTaskId !== null && shownTaskId !== (task?.id ?? null);
+      if (taskChanged) {
+        const oldText = overlayRoot.querySelector<HTMLElement>(".overlay-task, .overlay-empty");
+        if (oldText && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          await oldText.animate([{ opacity: 1, transform: "translateX(0)" }, { opacity: 0, transform: "translateX(-32px)" }], { duration: 220, easing: "ease-in", fill: "forwards" }).finished;
+        }
+      }
+      shownTaskId = task?.id ?? null;
+      const retainedCards = new Map([...overlayRoot.querySelectorAll<HTMLElement>("[data-timer-card]")].map((card) => [card.dataset.timerCard!, card]));
       lastRenderKey = renderKey;
       overlayRoot.innerHTML = `<section class="overlay-card" aria-label="Следующая задача">
         <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>СЛЕДУЮЩАЯ ЗАДАЧА</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? "Снять закрепление и разрешить перемещение" : "Закрепить положение поверх окон"}" title="${pinned ? "Открепить" : "Закрепить положение и поверх окон"}">${pinned ? "◆" : "◇"}</button></header>
-        ${task ? `<div class="overlay-task"><span class="overlay-number">${String(task.position + 1).padStart(2, "0")}</span><strong>${escapeHtml(task.title)}</strong></div>
+        ${task ? `<div class="overlay-task"><strong>${escapeHtml(task.title)}</strong></div>
           <footer class="overlay-actions"><button type="button" data-overlay-complete="${task.id}">Выполнено</button><button type="button" data-overlay-open>Открыть список</button></footer>`
           : `<div class="overlay-empty"><strong>На сегодня всё</strong><button type="button" data-overlay-open>Добавить задачу</button></div>`}
         ${overlayError ? `<p class="overlay-error" role="alert">${escapeHtml(overlayError)} <button type="button" data-overlay-retry>Повторить</button></p>` : ""}
@@ -1086,20 +1099,29 @@ async function renderOverlay(): Promise<void> {
       if (displayTimers.length) {
         overlayRoot.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="Запущенные таймеры"><div class="overlay-timer-grid">${displayTimers.map((timer) => timerCard(timer, false, true).replace('class="timer-card ', `class="timer-card ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""} `)).join("")}</div></section>`);
       }
-      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-hide-overlay-timer]").forEach((button) => button.addEventListener("click", () => {
+      for (const card of overlayRoot.querySelectorAll<HTMLElement>("[data-timer-card]")) {
+        const old = retainedCards.get(card.dataset.timerCard!);
+        if (old && old.dataset.timerStatus === card.dataset.timerStatus) {
+          old.classList.toggle("is-evaporating", endingTimers.has(card.dataset.timerCard!));
+          card.replaceWith(old);
+        }
+      }
+      if (taskChanged) overlayRoot.querySelector<HTMLElement>(".overlay-task, .overlay-empty")?.animate([{ opacity: 0, transform: "translateX(32px)" }, { opacity: 1, transform: "translateX(0)" }], { duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280, easing: "ease-out" });
+      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-hide-overlay-timer]").forEach((button) => { button.onclick = () => {
         const id = button.dataset.hideOverlayTimer;
         if (!id) return;
         hiddenTimerIds.add(id);
-        visibleTimerIds.delete(id);
+        const timer = runningTimers.find((item) => item.id === id);
+        if (timer) endingTimers.set(id, timer);
         previousRunningIds.delete(id);
-        endingTimers.delete(id);
         void load();
-      }));
+        window.setTimeout(() => { visibleTimerIds.delete(id); endingTimers.delete(id); void load(); }, 900);
+      }; });
       overlayRoot.querySelector<HTMLElement>(".overlay-header")?.addEventListener("pointerdown", (event) => {
         if (pinned || (event.target as HTMLElement).closest("button")) return;
         void getCurrentWindow().startDragging().catch((error: unknown) => { overlayError = backendMessage(error); });
       });
-      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-timer-action]").forEach((button) => button.addEventListener("click", async () => {
+      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-timer-action]").forEach((button) => { button.onclick = async () => {
         const id = button.dataset.timerId;
         const action = button.dataset.timerAction;
         if (!id || !action) return;
@@ -1115,11 +1137,11 @@ async function renderOverlay(): Promise<void> {
           overlayError = "";
           await load();
         } catch (error) { overlayError = backendMessage(error); await load(); }
-      }));
-      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-timer-fullscreen]").forEach((button) => button.addEventListener("click", () => {
+      }; });
+      overlayRoot.querySelectorAll<HTMLButtonElement>("[data-timer-fullscreen]").forEach((button) => { button.onclick = () => {
         const id = button.dataset.timerFullscreen;
         if (id) void invoke("open_overlay_timer_focus", { id });
-      }));
+      }; });
       overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-pin]")?.addEventListener("click", async () => {
         try { await invoke("set_overlay_pinned", { pinned: !pinned }); overlayError = ""; await load(); }
         catch (error) { overlayError = backendMessage(error); await load(); }
@@ -1137,6 +1159,7 @@ async function renderOverlay(): Promise<void> {
       overlayRoot.innerHTML = `<section class="overlay-card overlay-failed"><strong>Очередь недоступна</strong><p role="alert">${escapeHtml(overlayError)}</p><button type="button" data-overlay-retry>Повторить</button></section>`;
       overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-retry]")?.addEventListener("click", () => { overlayError = ""; void load(); });
     }
+    finally { loadingOverlay = false; }
   };
   await load();
   void listen("tasks-changed", () => { void load(); });
