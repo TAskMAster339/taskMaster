@@ -484,13 +484,20 @@ function timerCard(timer: Timer, fullscreen = false, overlay = false): string {
   </article>`;
 }
 
+function renderSidebar(): string {
+  const sections: { view: View; label: string; count?: number }[] = [
+    { view: "today", label: "Сегодня", count: activeTasks().length },
+    { view: "completed", label: "Выполнено", count: completedTodayTasks().length },
+    { view: "history", label: "История" },
+    { view: "timers", label: "Таймеры" },
+  ];
+  return `<aside class="sidebar" aria-label="taskMaster"><nav class="navigation" aria-label="Разделы">
+    ${sections.map(({ view, label, count }, index) => `<a class="nav-item ${activeView === view ? "is-current" : ""}" href="#${view}" data-view="${view}" ${activeView === view ? 'aria-current="page"' : ""}><span class="nav-index">${String(index + 1).padStart(2, "0")}</span>${label}${count === undefined ? "" : `<span class="nav-count">${count}</span>`}</a>`).join("")}
+  </nav><button class="theme-switch" type="button" data-view="settings" ${activeView === "settings" ? 'aria-current="page"' : ""} aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button></aside>`;
+}
+
 function renderSettings(): void {
-  root.innerHTML = `<div class="app-shell"><aside class="sidebar" aria-label="taskMaster"><nav class="navigation" aria-label="Разделы">
-    <a class="nav-item" href="#today" data-view="today">Сегодня</a>
-    <a class="nav-item" href="#completed" data-view="completed">Выполнено</a>
-    <a class="nav-item" href="#history" data-view="history">История</a>
-    <a class="nav-item" href="#timers" data-view="timers">Таймеры</a>
-  </nav><button class="theme-switch" type="button" data-view="settings" aria-current="page" aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button></aside>
+  root.innerHTML = `<div class="app-shell">${renderSidebar()}
   <main class="main-content settings-view"><h1>Настройки<span class="heading-period">.</span></h1>
     <section class="settings-section" aria-labelledby="theme-heading"><h2 id="theme-heading">Оформление</h2><label for="settings-theme">Тема</label>
     <select id="settings-theme" data-theme-select>${themeOrder.map((value) => `<option value="${value}" ${theme === value ? "selected" : ""}>${themeLabels[value]}</option>`).join("")}</select>
@@ -563,12 +570,7 @@ function renderSettings(): void {
 function renderTimers(): void {
   const focused = timers.find((timer) => timer.id === fullscreenTimerId);
   root.innerHTML = `<div class="app-shell ${focused ? "is-timer-fullscreen" : ""}">
-    ${focused ? "" : `<aside class="sidebar" aria-label="taskMaster"><nav class="navigation" aria-label="Разделы">
-      <a class="nav-item" href="#today" data-view="today"><span class="nav-index">01</span>Сегодня<span class="nav-count">${activeTasks().length}</span></a>
-      <a class="nav-item" href="#completed" data-view="completed"><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedTodayTasks().length}</span></a>
-      <a class="nav-item" href="#history" data-view="history"><span class="nav-index">03</span>История</a>
-      <a class="nav-item is-current" href="#timers" data-view="timers" aria-current="page"><span class="nav-index">04</span>Таймеры</a>
-    </nav><button class="theme-switch" type="button" data-view="settings" aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button></aside>`}
+    ${focused ? "" : renderSidebar()}
     <main class="main-content timer-view ${focused ? "timer-view-fullscreen" : ""}" id="timers">
       ${focused ? `${timerCard(focused, true)}<p class="error-banner" role="alert" ${timerError ? "" : "hidden"}>${escapeHtml(timerError)}</p>` : `<header class="timer-page-heading"><div><p class="eyebrow">ИНСТРУМЕНТЫ</p><h1>Таймеры<span class="heading-period">.</span></h1></div><button class="add-button timer-add-button" type="button" data-add-timer aria-label="Добавить таймер">＋</button></header>
       <p class="error-banner" role="alert" ${timerError ? "" : "hidden"}>${escapeHtml(timerError)}</p>
@@ -619,15 +621,7 @@ function render(allowDuringAnimation = false): void {
 
   root.innerHTML = `
     <div class="app-shell">
-      <aside class="sidebar" aria-label="taskMaster">
-        <nav class="navigation" aria-label="Разделы">
-          <a class="nav-item ${showingToday ? "is-current" : ""}" href="#today" data-view="today" ${showingToday ? 'aria-current="page"' : ""}><span class="nav-index">01</span>Сегодня<span class="nav-count">${active.length}</span></a>
-          <a class="nav-item ${showingCompleted ? "is-current" : ""}" href="#completed" data-view="completed" ${showingCompleted ? 'aria-current="page"' : ""}><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedToday.length}</span></a>
-          <a class="nav-item ${showingHistory ? "is-current" : ""}" href="#history" data-view="history" ${showingHistory ? 'aria-current="page"' : ""}><span class="nav-index">03</span>История</a>
-          <a class="nav-item" href="#timers" data-view="timers"><span class="nav-index">04</span>Таймеры</a>
-        </nav>
-        <button class="theme-switch" type="button" data-view="settings" aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button>
-      </aside>
+      ${renderSidebar()}
 
       <main class="main-content ${showingToday ? "is-today-view" : showingHistory ? "is-history-view" : "is-completed-view"}" id="${activeView}">
         <section class="day-heading" aria-labelledby="page-title">
