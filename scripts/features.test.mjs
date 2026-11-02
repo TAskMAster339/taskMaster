@@ -1,15 +1,19 @@
-// Run against Vite. Playwright and @axe-core/playwright may be installed outside the repo.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
-import path from 'node:path';
-const require = createRequire(process.env.TASKMASTER_BROWSER_MODULES ? path.join(process.env.TASKMASTER_BROWSER_MODULES, 'package.json') : import.meta.url);
-const { chromium } = require('playwright');
-const { default: AxeBuilder } = require('@axe-core/playwright');
-const base = process.env.TASKMASTER_DEV_URL || 'http://127.0.0.1:1420';
+import { chromium } from 'playwright';
+import AxeBuilder from '@axe-core/playwright';
+import { createServer } from 'vite';
+
+let server;
 let browser;
-before(async () => { browser = await chromium.launch({ channel: 'msedge', headless: true }); });
-after(async () => { await browser?.close(); });
+let base;
+before(async () => {
+ server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: false } });
+ await server.listen();
+ base = server.resolvedUrls.local[0].replace(/\/$/, '');
+ browser = await chromium.launch({ headless: true });
+});
+after(async () => { await browser?.close(); await server?.close(); });
 async function fixture(options = {}, count = 100) {
  const context = await browser.newContext({ viewport: { width: 920, height: 700 }, reducedMotion: 'reduce', ...options });
  const page = await context.newPage();
@@ -268,5 +272,37 @@ test('full reset confirms backup deletion, works with an unavailable DB, and onl
   assert.equal(await page.locator('[data-clear-error]').innerText(), '');
   assert.equal(await page.locator('[data-clear-dialog] button[type="submit"]').isDisabled(), true);
   assert.deepEqual(errors, []);
+ } finally { await context.close(); }
+});
+
+
+test('5000-task performance fixture renders and switches views without errors', async () => {
+ const page = await browser.newPage();
+ try {
+  await page.goto(`${base}/scripts/ui-check.html?count=5000`);
+  await page.waitForSelector('pre');
+  const result = JSON.parse(await page.locator('pre').innerText());
+  assert.equal(result.renderedRows, 5000);
+  assert.deepEqual(result.errors, []);
+  console.log('5000-task timings:', JSON.stringify(result));
+ } finally { await page.close(); }
+});
+
+test('capture stable visual reference', { skip: !process.env.TASKMASTER_VISUAL_DIR }, async () => {
+ const { mkdir } = await import('node:fs/promises');
+ const directory = process.env.TASKMASTER_VISUAL_DIR;
+ await mkdir(directory, { recursive: true });
+ const { context, page } = await fixture({}, 100);
+ try {
+  await page.clock.setFixedTime(new Date('2026-11-03T12:00:00+03:00'));
+  for (const theme of ['light', 'dark']) {
+   await page.locator('[data-view="settings"]').click();
+   await page.locator('[data-theme-select]').selectOption(theme);
+   for (const view of ['today', 'history', 'timers', 'settings']) {
+    await page.locator(`[data-view="${view}"]`).click();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: `${directory}/${theme}-${view}.png`, animations: 'disabled' });
+   }
+  }
  } finally { await context.close(); }
 });

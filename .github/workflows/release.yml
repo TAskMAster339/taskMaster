@@ -35,6 +35,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install browser for UI tests
+        run: npx playwright install chromium
+
       - name: Run release checks
         shell: pwsh
         run: |
@@ -46,6 +49,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed" }
           npm test
           if ($LASTEXITCODE -ne 0) { throw "frontend tests failed" }
+          npm run test:browser
+          if ($LASTEXITCODE -ne 0) { throw "browser tests failed" }
           npm run build
           if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
 

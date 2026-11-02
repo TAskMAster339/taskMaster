@@ -40,6 +40,7 @@ mockIPC(async (command, args) => {
     case 'get_next_task': return tasks[0] || null;
     case 'list_timers': return timers;
     case 'get_overlay_pinned': return false;
+    case 'resize_overlay_for_timers': return 1;
     case 'set_task_reminder':
     case 'clear_task_reminder': {
       if (reminderError) throw { code: 'invalid_reminder_time', message: 'Выберите время позже текущего.' };
