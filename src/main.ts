@@ -57,8 +57,8 @@ const taskAnimationLocks = new Set<string>();
 const taskAnimationErrors: string[] = [];
 let announcement = "";
 let theme: Theme = readTheme();
-type View = "today" | "completed" | "history" | "timers";
-let activeView: View = window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : window.location.hash === "#timers" ? "timers" : "today";
+type View = "today" | "completed" | "history" | "timers" | "settings";
+let activeView: View = window.location.hash === "#settings" ? "settings" : window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : window.location.hash === "#timers" ? "timers" : "today";
 let historyDay: HistoryDay = { completed: [], archived: [] };
 let createdTaskDays = new Set<string>();
 let historyLoading = false;
@@ -335,13 +335,6 @@ function applyTheme(): void {
   document.documentElement.dataset.themeMode = theme;
 }
 
-function updateThemeButton(): void {
-  const button = root.querySelector<HTMLButtonElement>("[data-theme-switch]");
-  if (!button) return;
-  button.setAttribute("aria-label", `Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить`);
-  button.querySelector(".theme-label")!.textContent = themeLabels[theme];
-}
-
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => {
     const entities: Record<string, string> = {
@@ -484,6 +477,26 @@ function timerCard(timer: Timer, fullscreen = false, overlay = false): string {
   </article>`;
 }
 
+function renderSettings(): void {
+  root.innerHTML = `<div class="app-shell"><aside class="sidebar" aria-label="taskMaster"><nav class="navigation" aria-label="Разделы">
+    <a class="nav-item" href="#today" data-view="today">Сегодня</a>
+    <a class="nav-item" href="#completed" data-view="completed">Выполнено</a>
+    <a class="nav-item" href="#history" data-view="history">История</a>
+    <a class="nav-item" href="#timers" data-view="timers">Таймеры</a>
+  </nav><button class="theme-switch" type="button" data-view="settings" aria-current="page" aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button></aside>
+  <main class="main-content settings-view"><h1>Настройки<span class="heading-period">.</span></h1>
+    <section class="settings-section" aria-labelledby="theme-heading"><h2 id="theme-heading">Оформление</h2><label for="settings-theme">Тема</label>
+    <select id="settings-theme" data-theme-select>${themeOrder.map((value) => `<option value="${value}" ${theme === value ? "selected" : ""}>${themeLabels[value]}</option>`).join("")}</select>
+    <p role="alert" data-settings-error></p></section>
+  </main></div>`;
+  bindEvents();
+  root.querySelector<HTMLSelectElement>("[data-theme-select]")?.addEventListener("change", (event) => {
+    const value = (event.target as HTMLSelectElement).value as Theme;
+    try { localStorage.setItem(themeStorageKey, value); theme = value; applyTheme(); }
+    catch { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = "Не удалось сохранить тему. Повторите попытку."; }
+  });
+}
+
 function renderTimers(): void {
   const focused = timers.find((timer) => timer.id === fullscreenTimerId);
   root.innerHTML = `<div class="app-shell ${focused ? "is-timer-fullscreen" : ""}">
@@ -492,7 +505,7 @@ function renderTimers(): void {
       <a class="nav-item" href="#completed" data-view="completed"><span class="nav-index">02</span>Выполнено<span class="nav-count">${completedTodayTasks().length}</span></a>
       <a class="nav-item" href="#history" data-view="history"><span class="nav-index">03</span>История</a>
       <a class="nav-item is-current" href="#timers" data-view="timers" aria-current="page"><span class="nav-index">04</span>Таймеры</a>
-    </nav><button class="theme-switch" type="button" data-theme-switch aria-label="Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить"><span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy"><span class="theme-label">${themeLabels[theme]}</span></span></button></aside>`}
+    </nav><button class="theme-switch" type="button" data-view="settings" aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button></aside>`}
     <main class="main-content timer-view ${focused ? "timer-view-fullscreen" : ""}" id="timers">
       ${focused ? `${timerCard(focused, true)}<p class="error-banner" role="alert" ${timerError ? "" : "hidden"}>${escapeHtml(timerError)}</p>` : `<header class="timer-page-heading"><div><p class="eyebrow">ИНСТРУМЕНТЫ</p><h1>Таймеры<span class="heading-period">.</span></h1></div><button class="add-button timer-add-button" type="button" data-add-timer aria-label="Добавить таймер">＋</button></header>
       <p class="error-banner" role="alert" ${timerError ? "" : "hidden"}>${escapeHtml(timerError)}</p>
@@ -508,6 +521,7 @@ function renderTimers(): void {
 function render(allowDuringAnimation = false): void {
   if (mouseDragActive) return;
   if (taskAnimationLocks.size > 0 && !allowDuringAnimation) return;
+  if (activeView === "settings") { renderSettings(); return; }
   if (activeView === "timers") { renderTimers(); return; }
   if (timerAnimationFrame !== null) {
     cancelAnimationFrame(timerAnimationFrame);
@@ -549,9 +563,7 @@ function render(allowDuringAnimation = false): void {
           <a class="nav-item ${showingHistory ? "is-current" : ""}" href="#history" data-view="history" ${showingHistory ? 'aria-current="page"' : ""}><span class="nav-index">03</span>История</a>
           <a class="nav-item" href="#timers" data-view="timers"><span class="nav-index">04</span>Таймеры</a>
         </nav>
-        <button class="theme-switch" type="button" data-theme-switch aria-label="Тема: ${themeLabels[theme]}. Нажмите, чтобы сменить">
-          <span class="theme-icon" aria-hidden="true">◐</span><span class="theme-copy"><span class="theme-label">${themeLabels[theme]}</span></span>
-        </button>
+        <button class="theme-switch" type="button" data-view="settings" aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button>
       </aside>
 
       <main class="main-content ${showingToday ? "is-today-view" : showingHistory ? "is-history-view" : "is-completed-view"}" id="${activeView}">
@@ -807,13 +819,6 @@ function bindEvents(): void {
       const restored = await perform(() => invoke("restore_task", { id }));
       if (restored) await refreshHistory();
     });
-  });
-
-  root.querySelector<HTMLButtonElement>("[data-theme-switch]")?.addEventListener("click", () => {
-    theme = themeOrder[(themeOrder.indexOf(theme) + 1) % themeOrder.length]!;
-    try { localStorage.setItem(themeStorageKey, theme); } catch { /* Theme remains active for this session. */ }
-    applyTheme();
-    updateThemeButton();
   });
 
   root.querySelector<HTMLButtonElement>("[data-toggle-overlay]")?.addEventListener("click", async () => {
@@ -1332,7 +1337,7 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
   if (theme === "system") applyTheme();
 });
 const syncViewFromHash = (): void => {
-  const nextView: View = window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : window.location.hash === "#timers" ? "timers" : "today";
+  const nextView: View = window.location.hash === "#settings" ? "settings" : window.location.hash === "#completed" ? "completed" : window.location.hash === "#history" ? "history" : window.location.hash === "#timers" ? "timers" : "today";
   if (nextView === activeView) return;
   activeView = nextView;
   render(true);
