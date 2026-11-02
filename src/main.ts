@@ -77,6 +77,18 @@ let timerAnimationFrame: number | null = null;
 let timerDialogOpen = false;
 let timerError = "";
 let fullscreenTimerId: string | null = null;
+interface BackupStatus { directory: string; warning: string | null; databaseAvailable: boolean; hasDailyCopy: boolean; }
+interface RestorePreview { token: string; source: string; tasks: number; events: number; timers: number; }
+let backupStatus: BackupStatus | null = null;
+let backupMessage = "";
+let backupBusy = false;
+let restorePreview: RestorePreview | null = null;
+async function refreshBackupStatus(): Promise<void> {
+  try { backupStatus = await invoke<BackupStatus>("get_backup_status"); }
+  catch (error) { backupMessage = backendMessage(error); }
+  if (activeView === "settings") render(true);
+}
+
 let preferences = { reminderMinutes: 15, archiveHours: 24 };
 let preferencesReady = false;
 let preferencesError = "";
@@ -496,7 +508,63 @@ function renderSidebar(): string {
   </nav><button class="theme-switch" type="button" data-view="settings" ${activeView === "settings" ? 'aria-current="page"' : ""} aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button></aside>`;
 }
 
+function renderBackupSettings(): string {
+  return `<section class="settings-section" aria-labelledby="backup-heading"><h2 id="backup-heading">Резервные копии</h2>
+    <p>Ежедневные копии создаются при запуске. Хранятся последние семь.</p>
+    ${backupStatus?.warning ? `<p class="backup-warning" role="alert">${escapeHtml(backupStatus.warning)}</p>` : ""}
+    <div class="backup-actions">
+      <button class="retry-button" type="button" data-backup-action="create" ${backupBusy || !backupStatus?.databaseAvailable ? "disabled" : ""}>Создать резервную копию</button>
+      <button class="retry-button" type="button" data-backup-action="choose" ${backupBusy || !backupStatus ? "disabled" : ""}>Восстановить из файла</button>
+      <button class="retry-button" type="button" data-backup-action="latest" ${backupBusy || !backupStatus?.hasDailyCopy ? "disabled" : ""}>Восстановить последнюю ежедневную</button>
+      <button class="retry-button" type="button" data-backup-action="folder" ${backupBusy || !backupStatus ? "disabled" : ""}>Открыть папку данных</button>
+    </div><p role="status" aria-live="polite">${escapeHtml(backupMessage)}</p>
+    ${restorePreview ? `<dialog class="reminder-dialog backup-confirm" data-restore-dialog aria-labelledby="restore-heading"><form data-restore-confirm><h2 id="restore-heading">Восстановить данные?</h2>
+      <p class="backup-source">${escapeHtml(restorePreview.source)}</p>
+      <dl class="backup-summary"><dt>Задачи</dt><dd>${restorePreview.tasks}</dd><dt>События истории</dt><dd>${restorePreview.events}</dd><dt>Таймеры</dt><dd>${restorePreview.timers}</dd></dl>
+      <p>Текущие задачи, история, таймеры и настройки задач будут заменены. Перед заменой текущие данные будут сохранены отдельно.</p>
+      <div class="reminder-actions"><button type="button" data-cancel-restore ${backupBusy ? "disabled" : ""}>Отмена</button><button type="submit" ${backupBusy ? "disabled" : ""}>${backupBusy ? "Восстановление…" : "Восстановить"}</button></div>
+    </form></dialog>` : ""}
+  </section>`;
+}
+
+function bindBackupSettings(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-backup-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (backupBusy) return;
+    const action = button.dataset.backupAction;
+    backupBusy = true; backupMessage = action === "create" ? "Создание копии…" : action === "folder" ? "" : "Проверка копии…"; render(true);
+    try {
+      if (action === "folder") { await invoke("open_data_directory"); }
+      else if (action === "create") { const path = await invoke<string | null>("create_database_backup"); backupMessage = path ? `Копия сохранена: ${path}` : ""; }
+      else { restorePreview = await invoke<RestorePreview | null>("prepare_database_restore", { latest: action === "latest" }); backupMessage = ""; }
+    } catch (error) { backupMessage = backendMessage(error); }
+    finally { backupBusy = false; render(true); }
+  }));
+  const cancel = (): void => { if (backupBusy) return; restorePreview = null; void invoke("cancel_database_restore").catch((error) => { backupMessage = backendMessage(error); render(true); }); render(true); };
+  root.querySelector<HTMLButtonElement>("[data-cancel-restore]")?.addEventListener("click", cancel);
+  const dialog = root.querySelector<HTMLDialogElement>("[data-restore-dialog]");
+  dialog?.addEventListener("cancel", (event) => { event.preventDefault(); cancel(); });
+  root.querySelector<HTMLFormElement>("[data-restore-confirm]")?.addEventListener("submit", async (event) => {
+    event.preventDefault(); if (!restorePreview || backupBusy) return;
+    const token = restorePreview.token; backupBusy = true; backupMessage = "Восстановление…"; render(true);
+    let restoredPath: string | null = null;
+    try {
+      const path = await invoke<string>("confirm_database_restore", { token });
+      restoredPath = path;
+      restorePreview = null; editingTaskId = null; fullscreenTimerId = null; taskAnimationLocks.clear();
+      preferences = await invoke<typeof preferences>("get_preferences"); preferencesReady = true;
+      await Promise.all([refreshTasks(), refreshTimers(false), loadShortcuts()]);
+      const overlayStatus = await invoke<OverlayShortcutStatus>("get_overlay_shortcut_status");
+      overlayShortcut = overlayStatus.shortcut; overlayShortcutAvailable = overlayStatus.available;
+      backupMessage = `Данные восстановлены. Предыдущие данные сохранены: ${path}`;
+      await refreshBackupStatus();
+    } catch (error) { restorePreview = null; backupMessage = restoredPath ? `Данные восстановлены, но интерфейс не удалось обновить. Перезапустите приложение. Предыдущие данные: ${restoredPath}` : backendMessage(error); }
+    finally { backupBusy = false; render(true); }
+  });
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
 function renderSettings(): void {
+  const previousScrollTop = root.querySelector<HTMLElement>(".settings-view")?.scrollTop ?? 0;
   root.innerHTML = `<div class="app-shell">${renderSidebar()}
   <main class="main-content settings-view"><h1>Настройки<span class="heading-period">.</span></h1>
     <section class="settings-section" aria-labelledby="theme-heading"><h2 id="theme-heading">Оформление</h2><label for="settings-theme">Тема</label>
@@ -517,9 +585,11 @@ function renderSettings(): void {
         return `<form class="shortcut-row" role="row" data-shortcut-form="${action}"><div role="cell"><label for="shortcut-${action}">${action === "overlay" ? "Показать / скрыть оверлей" : shortcutLabels[action]}</label><small>${action === "overlay" ? "Глобально" : "В приложении"}</small></div><div role="cell"><input id="shortcut-${action}" data-shortcut-capture data-combination="${escapeHtml(value)}" value="${escapeHtml(displayShortcut(value))}" readonly aria-label="Сочетание: ${action === "overlay" ? "Оверлей" : shortcutLabels[action]}" ${shortcutsReady ? "" : "disabled"}/></div><div role="cell"><button class="retry-button" type="submit" ${shortcutsReady ? "" : "disabled"}>Сохранить</button></div><p role="status" data-shortcut-status>${action === "overlay" && !overlayShortcutAvailable ? "Не удалось зарегистрировать сочетание. Выберите другое." : ""}</p></form>`;
       }).join("")}</div>
     </section>
+    ${renderBackupSettings()}
     <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p></section>
   </main></div>`;
   bindEvents();
+  bindBackupSettings();
   root.querySelectorAll<HTMLInputElement>("[data-shortcut-capture]").forEach((input) => {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Tab") return;
@@ -565,6 +635,8 @@ function renderSettings(): void {
     try { localStorage.setItem(themeStorageKey, value); theme = value; applyTheme(); }
     catch { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = "Не удалось сохранить тему. Повторите попытку."; }
   });
+  const settingsPage = root.querySelector<HTMLElement>(".settings-view");
+  if (settingsPage) settingsPage.scrollTop = previousScrollTop;
 }
 
 function renderTimers(): void {
@@ -613,7 +685,7 @@ function render(allowDuringAnimation = false): void {
              <span class="empty-mark" aria-hidden="true">!</span>
              <strong>${showingToday ? "Очередь недоступна" : "Список недоступен"}</strong>
              <span>Попробуйте загрузить задачи ещё раз.</span>
-             <button class="retry-button" type="button" data-retry-load>Повторить</button>
+             <button class="retry-button" type="button" data-retry-load>Повторить</button><button class="retry-button" type="button" data-view="settings">Восстановление данных</button>
            </div>`
         : `<div class="empty-state">
            <strong>${showingToday ? "Задач пока нет" : "Выполненных задач сегодня нет"}</strong>
@@ -1383,6 +1455,7 @@ if (getCurrentWindow().label === "overlay") {
   applyTheme();
   document.body.classList.add("overlay-mode");
   void renderOverlay();
+  void listen("database-restored", () => window.location.reload());
 } else {
 applyTheme();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -1430,6 +1503,7 @@ void listen("reminder-runtime-error", () => {
   errorMessage = "Не удалось обработать напоминание. Перезапустите приложение.";
   render(true);
 });
+void refreshBackupStatus();
 void invoke<typeof preferences>("get_preferences").then((value) => { preferences = value; preferencesReady = true; if (activeView === "settings") render(true); }).catch((error) => { preferencesError = backendMessage(error); if (activeView === "settings") render(true); });
 render();
 void refreshTasks();

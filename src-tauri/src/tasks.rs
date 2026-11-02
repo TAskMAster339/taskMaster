@@ -102,16 +102,31 @@ pub struct Preferences {
     pub archive_hours: i64,
 }
 
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 7;
+
 pub const MAX_TIMER_SECONDS: i64 = 359_999;
 
 pub struct TaskStore {
-    connection: Connection,
-    timer_clocks: Mutex<HashMap<String, Instant>>,
+    pub(crate) connection: Connection,
+    pub(crate) timer_clocks: Mutex<HashMap<String, Instant>>,
 }
 
 impl TaskStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+        use std::io::Read;
+        let path = path.as_ref();
+        if path.exists() {
+            let mut header = [0u8; 16];
+            let mut file = std::fs::File::open(path).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            if file.read_exact(&mut header).is_err() || &header != b"SQLite format 3\0" {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         let connection = Connection::open(path)?;
+        let integrity: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         Self::from_connection(connection)
     }
 
@@ -123,7 +138,7 @@ impl TaskStore {
     fn from_connection(connection: Connection) -> rusqlite::Result<Self> {
         let schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !(0..=7).contains(&schema_version) {
+        if !(0..=CURRENT_SCHEMA_VERSION).contains(&schema_version) {
             return Err(rusqlite::Error::InvalidQuery);
         }
 

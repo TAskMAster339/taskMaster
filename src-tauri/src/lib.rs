@@ -1,4 +1,5 @@
 mod shortcuts;
+mod storage;
 mod tasks;
 
 use std::{
@@ -76,6 +77,173 @@ impl AppError {
 
 struct AppState {
     store: Mutex<Result<TaskStore, AppError>>,
+}
+
+struct BackupState {
+    directory: PathBuf,
+    warning: Mutex<Option<String>>,
+    pending: Mutex<Option<storage::Prepared>>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupStatus {
+    directory: String,
+    warning: Option<String>,
+    database_available: bool,
+    has_daily_copy: bool,
+}
+
+#[tauri::command]
+fn get_backup_status(app: AppHandle) -> Result<BackupStatus, AppError> {
+    let backup = app.state::<BackupState>();
+    let state = app.state::<AppState>();
+    let warning = backup.warning.lock().map_err(|_| AppError::lock())?.clone();
+    let database_available = state.store.lock().map_err(|_| AppError::lock())?.is_ok();
+    let has_daily_copy = !storage::daily_files(&backup.directory.join("backups"))?.is_empty();
+    Ok(BackupStatus {
+        directory: backup.directory.to_string_lossy().into_owned(),
+        warning,
+        database_available,
+        has_daily_copy,
+    })
+}
+
+#[tauri::command]
+async fn create_database_backup(app: AppHandle) -> Result<Option<String>, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let mut dialog = app.dialog().file();
+        if let Some(window) = app.get_webview_window("main") {
+            dialog = dialog.set_parent(&window);
+        }
+        let Some(file) = dialog
+            .add_filter("SQLite", &["sqlite3", "db"])
+            .set_file_name("taskMaster.sqlite3")
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let path = file
+            .into_path()
+            .map_err(|_| storage::error("Выберите локальный файл."))?;
+        with_store(&app.state::<AppState>(), |store| {
+            storage::snapshot(&store.connection, &path)
+        })?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|_| storage::error("Не удалось завершить создание копии."))?
+}
+
+#[tauri::command]
+async fn prepare_database_restore(
+    latest: bool,
+    app: AppHandle,
+) -> Result<Option<storage::Preview>, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let backup = app.state::<BackupState>();
+        let copies = backup.directory.join("backups");
+        backup.pending.lock().map_err(|_| AppError::lock())?.take();
+        let candidate = if latest {
+            let mut selected = None;
+            for file in storage::daily_files(&copies)? {
+                if let Ok(prepared) = storage::prepare(&file, &copies) {
+                    selected = Some(prepared);
+                    break;
+                }
+            }
+            selected.ok_or_else(|| {
+                storage::error("Нет исправных ежедневных копий. Выберите файл вручную.")
+            })?
+        } else {
+            let mut dialog = app.dialog().file();
+            if let Some(window) = app.get_webview_window("main") {
+                dialog = dialog.set_parent(&window);
+            }
+            let Some(file) = dialog
+                .add_filter("SQLite", &["sqlite3", "db"])
+                .set_directory(&copies)
+                .blocking_pick_file()
+            else {
+                return Ok(None);
+            };
+            let path = file
+                .into_path()
+                .map_err(|_| storage::error("Выберите локальный файл."))?;
+            storage::prepare(&path, &copies)?
+        };
+        let preview = candidate.preview.clone();
+        *backup.pending.lock().map_err(|_| AppError::lock())? = Some(candidate);
+        Ok(Some(preview))
+    })
+    .await
+    .map_err(|_| storage::error("Не удалось проверить копию."))?
+}
+
+#[tauri::command]
+fn cancel_database_restore(app: AppHandle) -> Result<(), AppError> {
+    app.state::<BackupState>()
+        .pending
+        .lock()
+        .map_err(|_| AppError::lock())?
+        .take();
+    Ok(())
+}
+
+#[tauri::command]
+async fn confirm_database_restore(token: String, app: AppHandle) -> Result<String, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let backup=app.state::<BackupState>();
+        let mut pending=backup.pending.lock().map_err(|_|AppError::lock())?;
+        if pending.as_ref().is_none_or(|p|p.preview.token!=token) { return Err(storage::error("Проверка копии устарела. Выберите файл повторно.")); }
+        let candidate=pending.take().ok_or_else(AppError::lock)?; drop(pending);
+        let state=app.state::<AppState>();
+        let mut guard=state.store.lock().map_err(|_|AppError::lock())?;
+        let copies=backup.directory.join("backups");
+        let safety=match guard.as_mut() {
+            Ok(store)=>storage::restore_live(store,&candidate,&copies)?,
+            Err(_)=> { let (store,safety)=storage::recover_unreadable(&backup.directory.join("taskmaster.sqlite3"),&candidate,&copies)?; *guard=Ok(store); safety }
+        };
+        *backup.warning.lock().map_err(|_| AppError::lock())?=None;
+        // Missed reminders remain diagnostic events; restoring must not deliver old alerts.
+        if let Ok(store)=guard.as_ref() {
+            let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+            if store.mark_missed_reminders(now).and_then(|_|store.clear_non_active_reminders(now)).is_err() {
+                *backup.warning.lock().map_err(|_|AppError::lock())?=Some("Данные восстановлены, но напоминания не удалось проверить. Перезапустите приложение.".into());
+            }
+        }
+        let restored_keys=guard.as_ref().map_err(Clone::clone)?.shortcuts()?;
+        drop(guard);
+        let overlay=app.state::<OverlayState>();
+        let global=overlay.settings.lock().map_err(|_|AppError::lock())?.shortcut.clone();
+        if shortcuts::validate(&restored_keys,&global).is_err() {
+            use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            let _=app.global_shortcut().unregister(global.as_str());
+            *overlay.shortcut_available.lock().map_err(|_|AppError::lock())?=false;
+            *backup.warning.lock().map_err(|_|AppError::lock())?=Some("Горячая клавиша оверлея конфликтует с восстановленными сочетаниями. Измените её в настройках.".into());
+        }
+        let _=app.emit("database-restored",());
+        Ok(safety.to_string_lossy().into_owned())
+    }).await.map_err(|_|storage::error("Не удалось завершить восстановление."))?
+}
+
+#[tauri::command]
+fn open_data_directory(app: AppHandle) -> Result<(), AppError> {
+    let directory = app.state::<BackupState>().directory.clone();
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(directory)
+            .spawn()
+            .map_err(|_| storage::error("Не удалось открыть папку данных."))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = directory;
+        Err(storage::error("Открытие папки поддерживается в Windows."))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +516,11 @@ fn delete_timer(id: String, state: State<'_, AppState>) -> Result<(), AppError> 
 }
 
 fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
+    if storage::restore_marker(&path.join("taskmaster.sqlite3")).exists() {
+        return Err(storage::error(
+            "Предыдущее восстановление прервано. Выберите резервную копию повторно; исходные файлы сохранены в папке данных.",
+        ));
+    }
     std::fs::create_dir_all(&path).map_err(|_| AppError::storage())?;
     let store =
         TaskStore::open(path.join("taskmaster.sqlite3")).map_err(|_| AppError::storage())?;
@@ -763,6 +936,7 @@ fn resize_overlay_for_timers(timer_count: usize, app: AppHandle) -> Result<usize
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -778,11 +952,30 @@ pub fn run() {
             show_main_window(app);
         }))
         .setup(|app| {
-            let store = app
-                .path()
-                .app_data_dir()
-                .map_err(|_| AppError::storage())
-                .and_then(open_store);
+            let directory = app.path().app_data_dir()?;
+            let store = open_store(directory.clone());
+            let warning = match &store {
+                Ok(store) => {
+                    let day: Result<String, _> =
+                        store
+                            .connection
+                            .query_row("SELECT date('now','localtime')", [], |row| row.get(0));
+                    day.map_err(|_| AppError::storage())
+                        .and_then(|day| {
+                            storage::daily_backup(store, &directory.join("backups"), &day)
+                        })
+                        .err()
+                        .map(|error| error.message)
+                }
+                Err(_) => {
+                    Some("Рабочая база недоступна. Восстановите данные из резервной копии.".into())
+                }
+            };
+            app.manage(BackupState {
+                directory,
+                warning: Mutex::new(warning),
+                pending: Mutex::new(None),
+            });
             app.manage(AppState {
                 store: Mutex::new(store),
             });
@@ -805,7 +998,12 @@ pub fn run() {
                 .map_err(|_| std::io::Error::other("overlay settings lock failed"))?
                 .shortcut
                 .clone();
-            let registered = app.global_shortcut().register(shortcut.as_str()).is_ok();
+            let compatible = with_store(&app.state::<AppState>(), |store| {
+                shortcuts::validate(&store.shortcuts()?, &shortcut)
+            })
+            .is_ok();
+            let registered =
+                compatible && app.global_shortcut().register(shortcut.as_str()).is_ok();
             *app.state::<OverlayState>()
                 .shortcut_available
                 .lock()
@@ -885,6 +1083,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_backup_status,
+            create_database_backup,
+            prepare_database_restore,
+            cancel_database_restore,
+            confirm_database_restore,
+            open_data_directory,
             get_shortcuts,
             update_shortcut,
             get_preferences,
