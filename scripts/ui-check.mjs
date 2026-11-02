@@ -16,6 +16,7 @@ if (!nativeRuntime) {
   mockIPC((command) => {
     switch (command) {
       case 'list_tasks': return tasks;
+      case 'get_display_settings': return { language: 'ja', highContrast: false };
       case 'get_shortcuts': return defaultShortcuts;
       case 'get_preferences': return { reminderMinutes: 15, archiveHours: 24 };
       case 'get_overlay_shortcut_status': return { shortcut: 'Ctrl+Alt+Space', available: true };

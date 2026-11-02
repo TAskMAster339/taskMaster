@@ -2,6 +2,7 @@ mod deletions;
 mod desktop;
 mod diagnostics;
 mod notifications;
+mod presentation;
 mod shortcuts;
 mod storage;
 mod tasks;
@@ -448,7 +449,7 @@ fn export_user_data(
         .lock()
         .map_err(|_| AppError::lock())?
         .clone();
-    let document = serde_json::json!({ "format": "taskmaster", "formatVersion": 1, "appVersion": env!("CARGO_PKG_VERSION"), "exportedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64, "data": data, "settings": { "theme": theme, "overlay": overlay } });
+    let document = serde_json::json!({ "format": "taskmaster", "formatVersion": 1, "appVersion": env!("CARGO_PKG_VERSION"), "exportedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64, "data": data, "settings": { "theme": theme, "overlay": overlay, "display": presentation::get_display_settings(app.state())? } });
     let path = app
         .path()
         .download_dir()
@@ -667,7 +668,7 @@ fn notify_timer_finished(app: &AppHandle, timer: Timer) {
     let result = notifications::ensure_available(app).and_then(|()| {
         app.notification()
             .builder()
-            .title("Таймер завершён")
+            .title(presentation::text("Таймер завершён"))
             .body(&timer.name)
             .show()
             .map_err(|_| notifications::delivery_error())
@@ -693,6 +694,24 @@ fn register_notification_actions(app: &AppHandle) {
             let _ = handle.emit("reminder-open-task", id.to_owned());
         }
     });
+}
+
+fn localized_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    let mut items = Vec::new();
+    for (id, key) in [
+        ("show", "Показать"),
+        ("hide", "Скрыть приложение"),
+        ("overlay", "Оверлей"),
+        ("settings", "Настройки"),
+        ("quit", "Выход"),
+    ] {
+        items.push(MenuItemBuilder::with_id(id, presentation::text(key)).build(app)?);
+    }
+    let mut builder = MenuBuilder::new(app);
+    for item in &items {
+        builder = builder.item(item);
+    }
+    builder.build()
 }
 
 fn start_reminder_scheduler(app: AppHandle) {
@@ -1073,6 +1092,8 @@ pub fn run() {
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
             diagnostics::initialize(&directory.join("logs"));
+            fs::create_dir_all(&directory)?;
+            presentation::initialize(app.handle(), &directory);
             let store = open_store(directory.clone());
             let warning = match &store {
                 Ok(store) => {
@@ -1143,16 +1164,9 @@ pub fn run() {
             start_reminder_scheduler(app.handle().clone());
             register_notification_actions(app.handle());
 
-            let show = MenuItemBuilder::with_id("show", "Показать").build(app)?;
-            let hide = MenuItemBuilder::with_id("hide", "Скрыть приложение").build(app)?;
-            let overlay = MenuItemBuilder::with_id("overlay", "Оверлей").build(app)?;
-            let settings = MenuItemBuilder::with_id("settings", "Настройки").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Выход").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .items(&[&show, &hide, &overlay, &settings, &quit])
-                .build()?;
+            let menu = localized_tray_menu(app.handle())?;
 
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main-tray")
                 .icon(
                     app.default_window_icon()
                         .expect("default window icon is configured")
@@ -1237,6 +1251,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            presentation::get_display_settings,
+            presentation::update_display_settings,
             desktop::open_about_link,
             clear_user_data,
             diagnostics::get_diagnostics_warning,

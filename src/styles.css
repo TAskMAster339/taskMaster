@@ -441,3 +441,50 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .about-links { display: flex; flex-wrap: wrap; gap: 16px; }
 .about-links a { color: var(--text); text-decoration: underline; text-underline-offset: 4px; min-height: 44px; display: inline-flex; align-items: center; }
 .about-links a:hover { color: var(--obi); }
+
+@font-face { font-family: "Noto Sans JP"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/fonts/noto-sans-jp.ttf") format("truetype"); }
+:lang(ja) { font-family: "Noto Sans JP", "IBM Plex Sans", sans-serif; }
+:lang(ja) :is(h1, h2, h3, button, input, select, .nav-link) { font-family: inherit; letter-spacing: normal; }
+.skip-link { position: fixed; z-index: 100; top: 8px; left: 8px; padding: 12px 16px; background: var(--page); color: var(--text); border: 2px solid currentColor; transform: translateY(-160%); }
+.skip-link:focus { transform: none; }
+.display-warning { position: fixed; z-index: 50; bottom: 8px; left: 8px; right: 8px; margin: 0; padding: 12px; background: var(--page); color: var(--text); border: 2px solid var(--danger); }
+.settings-section :is(label, button, a), .nav-link { overflow-wrap: anywhere; }
+.settings-section select { max-width: 100%; }
+:root[data-contrast="high"] {
+ color: var(--text); background: var(--page);
+ --paper: #fff; --paper-gray: #fff; --ink: #000; --white: #fff;
+ --obi: #000; --riso: #000; --text: #000; --page: #fff; --sidebar: #000;
+ --surface: #fff; --surface-soft: #fff; --muted: #000; --quiet: #000;
+ --line: #000; --line-strong: #000; --accent: #000; --accent-ink: #fff;
+ --accent-strong: #000; --focus: #000; --nav-current-bg: #fff; --nav-current-ink: #000;
+ --nav-count: #fff; --completed-ink: #000; --checkbox-border: #000; --danger: #000; --danger-soft: #fff;
+ --paper-texture: none; --ink-texture: none; --page-texture: none;
+}
+:root[data-contrast="high"][data-theme="dark"] {
+ --paper: #000; --paper-gray: #000; --ink: #fff; --white: #000;
+ --obi: #fff; --riso: #fff; --text: #fff; --page: #000; --sidebar: #fff;
+ --surface: #000; --surface-soft: #000; --muted: #fff; --quiet: #fff;
+ --line: #fff; --line-strong: #fff; --accent: #fff; --accent-ink: #000;
+ --accent-strong: #fff; --focus: #fff; --nav-current-bg: #000; --nav-current-ink: #fff;
+ --nav-count: #000; --completed-ink: #fff; --checkbox-border: #fff; --danger: #fff; --danger-soft: #000;
+}
+:root[data-contrast="high"] * { background-image: none !important; text-shadow: none !important; }
+:root[data-contrast="high"] :is(button, input, select, a, dialog) { border-color: currentColor; }
+:root[data-contrast="high"] :is(button, input, select):disabled { opacity: 1; border-style: dashed; }
+:root[data-contrast="high"] :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+:root[data-contrast="high"] .sidebar :focus-visible { outline-color: var(--white); }
+@media (forced-colors: active) {
+ :root, :root[data-theme], :root[data-contrast][data-theme] {
+  --paper: Canvas; --paper-gray: Canvas; --ink: CanvasText; --white: HighlightText;
+  --text: CanvasText; --page: Canvas; --sidebar: Canvas; --surface: Canvas; --surface-soft: Canvas;
+  --muted: CanvasText; --quiet: CanvasText; --line: CanvasText; --line-strong: CanvasText;
+  --obi: LinkText; --riso: Highlight; --accent: Highlight; --accent-ink: HighlightText; --focus: Highlight;
+  --completed-ink: CanvasText; --checkbox-border: ButtonText; --danger: CanvasText; --danger-soft: Canvas;
+  --nav-current-bg: Highlight; --nav-current-ink: HighlightText; --nav-count: CanvasText;
+  --paper-texture: none; --ink-texture: none; --page-texture: none;
+ }
+ * { forced-color-adjust: auto; background-image: none !important; }
+ :focus-visible { outline: 3px solid Highlight !important; outline-offset: 3px; }
+ :is(button, input, select, dialog) { border: 1px solid ButtonText; }
+ :is(.timer-ring-progress, .timer-ring-track) { stroke: CanvasText; }
+}

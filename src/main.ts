@@ -1,15 +1,29 @@
+import { t, backendText, setLanguage, language, locale, languages, languageNames, type Language } from "./i18n.ts";
 import { defaultShortcuts, shortcutLabels, keyboardCombination, displayShortcut, type ShortcutAction } from "./shortcuts";
 import { appendInBatches } from "./batches";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+interface DisplaySettings { language: Language; highContrast: boolean; }
+let displaySettings: DisplaySettings = { language: "ja", highContrast: false };
+let displaySettingsReady = false;
+let displaySettingsError = "";
+try {
+  displaySettings = await invoke<DisplaySettings>("get_display_settings");
+  setLanguage(displaySettings.language); displaySettingsReady = true;
+} catch (error) { displaySettingsError = backendMessage(error); }
+document.documentElement.lang = language();
+const displayWarning = document.createElement("p"); displayWarning.className = "display-warning";
+displayWarning.setAttribute("role", "alert"); displayWarning.hidden = !displaySettingsError;
+displayWarning.textContent = displaySettingsError; document.body.append(displayWarning);
+
 type TaskStatus = "active" | "completed" | "archived";
 type Theme = "system" | "dark" | "light";
 
 const themeStorageKey = "taskmaster.theme";
 const themeOrder: Theme[] = ["system", "dark", "light"];
-const themeLabels: Record<Theme, string> = { system: "Системная", dark: "Тёмная", light: "Светлая" };
+const themeLabels: Record<Theme, string> = { get system() { return t("Системная"); }, get dark() { return t("Тёмная"); }, get light() { return t("Светлая"); } };
 
 interface Task {
   id: string;
@@ -58,7 +72,30 @@ let mouseDragActive = false;
 let taskPointerHeld = false;
 const taskAnimationLocks = new Set<string>();
 const taskAnimationErrors: string[] = [];
-let announcement = "";
+const liveStatus = document.createElement("div");
+liveStatus.id = "app-status"; liveStatus.className = "visually-hidden";
+liveStatus.setAttribute("role", "status"); liveStatus.setAttribute("aria-live", "polite"); liveStatus.setAttribute("aria-atomic", "true");
+document.body.append(liveStatus);
+function announce(message: string): void { liveStatus.textContent = message; }
+function preserveTimerFocus(scope: ParentNode): () => void {
+  const control = document.activeElement as HTMLElement | null;
+  const card = control?.closest<HTMLElement>("[data-timer-card]");
+  if (!control || !card || !scope.contains(control)) return () => {};
+  const id = card.dataset.timerCard!;
+  const action = control.dataset.timerAction;
+  const fullscreen = control.hasAttribute("data-timer-fullscreen");
+  const exiting = control.hasAttribute("data-exit-fullscreen");
+  return () => {
+    const nextCard = scope.querySelector<HTMLElement>(`[data-timer-card="${CSS.escape(id)}"]`);
+    const selector = action === "start" || action === "pause" ? '[data-timer-action="start"], [data-timer-action="pause"]' : action ? `[data-timer-action="${action}"]` : fullscreen ? "[data-exit-fullscreen], [data-timer-fullscreen]" : exiting ? "[data-timer-fullscreen]" : "button";
+    const target = nextCard?.querySelector<HTMLElement>(selector) ?? scope.querySelector<HTMLElement>("[data-add-timer]");
+    target?.focus({ preventScroll: true });
+  };
+}
+const skipLink = document.createElement("a"); skipLink.className = "skip-link"; skipLink.href = "#today";
+skipLink.textContent = t("Перейти к содержимому");
+skipLink.addEventListener("click", (event) => { event.preventDefault(); const main = root.querySelector<HTMLElement>("main"); main?.setAttribute("tabindex", "-1"); main?.focus({ preventScroll: true }); });
+document.body.prepend(skipLink);
 let theme: Theme = readTheme();
 let appVersion = "";
 let appVersionError = "";
@@ -103,7 +140,7 @@ async function openPermanentDeletion(id: string): Promise<void> {
     dialog.dataset.purgeDialog = "";
     dialog.setAttribute("aria-labelledby", "purge-heading");
     dialog.setAttribute("aria-describedby", "purge-description");
-    dialog.innerHTML = `<form><h2 id="purge-heading">Удалить навсегда?</h2><p class="purge-title">${escapeHtml(preview.task.title)}</p><p id="purge-description">Задача и вся её история будут удалены без возможности отмены.</p>${preview.task.status === "active" ? `<p>Сейчас задача находится в активной очереди.</p>` : ""}<p>Событий: ${preview.eventCount}${preview.sessionCount ? ` · Сессий: ${preview.sessionCount}` : ""}</p><div class="reminder-actions"><button type="button" data-purge-cancel autofocus>Отмена</button><button type="submit" class="danger-action">Удалить навсегда</button></div></form>`;
+    dialog.innerHTML = `<form><h2 id="purge-heading">${t("Удалить навсегда?")}</h2><p class="purge-title">${escapeHtml(preview.task.title)}</p><p id="purge-description">${t("Задача и вся её история будут удалены без возможности отмены.")}</p>${preview.task.status === "active" ? `<p>${t("Сейчас задача находится в активной очереди.")}</p>` : ""}<p>${t("Событий:")} ${preview.eventCount}${preview.sessionCount ? ` · ${t("Сессий:")} ${preview.sessionCount}` : ""}</p><div class="reminder-actions"><button type="button" data-purge-cancel autofocus>${t("Отмена")}</button><button type="submit" class="danger-action">${t("Удалить навсегда")}</button></div></form>`;
     document.body.append(dialog);
     let busy = false;
     const close = (): void => { dialog.close(); dialog.remove(); root.querySelector<HTMLButtonElement>(`[data-purge-task="${id}"]`)?.focus(); };
@@ -136,10 +173,11 @@ function renderDeletionUndos(): void {
   if (undoExpiryTimer !== null) window.clearTimeout(undoExpiryTimer);
   undoExpiryTimer = deletionUndos.length ? window.setTimeout(renderDeletionUndos, Math.max(1, Math.min(...deletionUndos.map((item) => item.expiresAt)) - Date.now())) : null;
   let region = document.querySelector<HTMLElement>("#deletion-undos");
-  if (!region) { region = document.createElement("aside"); region.id = "deletion-undos"; region.className = "undo-notices"; region.setAttribute("aria-label", "Удалённые задачи"); region.setAttribute("aria-live", "polite"); document.body.append(region); }
+  if (!region) { region = document.createElement("aside"); region.id = "deletion-undos"; region.className = "undo-notices"; region.setAttribute("aria-label", t("Удалённые задачи")); region.setAttribute("aria-live", "polite"); document.body.append(region); }
+  region.setAttribute("aria-label", t("Удалённые задачи"));
   region.hidden = deletionUndos.length === 0 && !undoMessage;
-  const key = JSON.stringify([deletionUndos, [...undoBusy], undoMessage]); if (key === undoRenderKey) return; undoRenderKey = key;
-  region.innerHTML = `${undoMessage ? `<div class="undo-error" role="alert"><span>${escapeHtml(undoMessage)}</span><button type="button" data-dismiss-undo-message aria-label="Закрыть сообщение">×</button></div>` : ""}<ul>${deletionUndos.map((item) => `<li><span><small>Задача удалена</small><strong>${escapeHtml(item.title)}</strong></span><button type="button" data-undo-deletion="${item.token}" aria-label="Отменить удаление: ${escapeHtml(item.title)}" ${undoBusy.has(item.token) ? "disabled" : ""}>Отменить</button></li>`).join("")}</ul>`;
+  const key = JSON.stringify([language(), deletionUndos, [...undoBusy], undoMessage]); if (key === undoRenderKey) return; undoRenderKey = key;
+  region.innerHTML = `${undoMessage ? `<div class="undo-error" role="alert"><span>${escapeHtml(undoMessage)}</span><button type="button" data-dismiss-undo-message aria-label="${t("Закрыть сообщение")}">×</button></div>` : ""}<ul>${deletionUndos.map((item) => `<li><span><small>${t("Задача удалена")}</small><strong>${escapeHtml(item.title)}</strong></span><button type="button" data-undo-deletion="${item.token}" aria-label="${t("Отменить удаление:")} ${escapeHtml(item.title)}" ${undoBusy.has(item.token) ? "disabled" : ""}>${t("Отменить")}</button></li>`).join("")}</ul>`;
   region.querySelector<HTMLButtonElement>("[data-dismiss-undo-message]")?.addEventListener("click", () => { undoMessage = ""; renderDeletionUndos(); });
   region.querySelectorAll<HTMLButtonElement>("[data-undo-deletion]").forEach((button) => button.addEventListener("click", async () => {
     const token = button.dataset.undoDeletion!; if (undoBusy.has(token)) return;
@@ -148,7 +186,7 @@ function renderDeletionUndos(): void {
       const restored = await invoke<Task>("undo_task_deletion", { token });
       deletionUndos = deletionUndos.filter((item) => item.token !== token);
       await refreshTasks(); if (activeView === "history") await refreshHistory();
-      if (restored.status === "archived") undoMessage = "Удаление отменено. Срок задачи истёк, она находится в архиве.";
+      if (restored.status === "archived") undoMessage = t("Удаление отменено. Срок задачи истёк, она находится в архиве.");
       else root.querySelector<HTMLButtonElement>(`[data-toggle-task="${CSS.escape(restored.id)}"]`)?.focus();
     } catch (error) { undoMessage = backendMessage(error); }
     finally { undoBusy.delete(token); await refreshDeletionUndos(); renderDeletionUndos(); }
@@ -179,10 +217,10 @@ async function refreshAutostart(): Promise<void> {
   finally { autostartBusy = false; updateAutostartControls(); }
 }
 function renderAutostartSettings(): string {
-  return `<section class="settings-section" aria-labelledby="startup-heading"><h2 id="startup-heading">Запуск</h2>
-    <label class="settings-check"><input type="checkbox" data-autostart ${autostartEnabled ? "checked" : ""} ${autostartBusy || autostartEnabled === null ? "disabled" : ""}/><span>Запускать с Windows</span></label>
+  return `<section class="settings-section" aria-labelledby="startup-heading"><h2 id="startup-heading">${t("Запуск")}</h2>
+    <label class="settings-check"><input type="checkbox" data-autostart ${autostartEnabled ? "checked" : ""} ${autostartBusy || autostartEnabled === null ? "disabled" : ""}/><span>${t("Запускать с Windows")}</span></label>
     <p role="status" data-autostart-status>${escapeHtml(autostartMessage)}</p>
-    <button class="retry-button" type="button" data-autostart-retry ${autostartEnabled === null ? "" : "hidden"}>Повторить проверку</button>
+    <button class="retry-button" type="button" data-autostart-retry ${autostartEnabled === null ? "" : "hidden"}>${t("Повторить проверку")}</button>
   </section>`;
 }
 function bindAutostartSettings(): void {
@@ -191,7 +229,7 @@ function bindAutostartSettings(): void {
     const desired = (event.currentTarget as HTMLInputElement).checked;
     if (autostartBusy) { updateAutostartControls(); return; }
     autostartBusy = true; updateAutostartControls();
-    try { autostartEnabled = await invoke<boolean>("set_autostart_enabled", { enabled: desired }); autostartMessage = "Сохранено"; }
+    try { autostartEnabled = await invoke<boolean>("set_autostart_enabled", { enabled: desired }); autostartMessage = t("Сохранено"); }
     catch (error) {
       autostartMessage = backendMessage(error);
       try { autostartEnabled = await invoke<boolean>("get_autostart_enabled"); } catch { autostartEnabled = null; }
@@ -207,14 +245,14 @@ let notificationReadError = "";
 let notificationActionMessage = "";
 function updateNotificationControls(): void {
   const status = root.querySelector<HTMLElement>("[data-notification-permission]");
-  if (status) { status.textContent = notificationStatus?.message ?? (notificationReadError || "Проверка состояния…"); status.classList.toggle("is-blocked", notificationStatus !== null && !notificationStatus.canTest); }
+  if (status) { status.textContent = backendText(notificationStatus?.message ?? (notificationReadError || t("Проверка состояния…"))); status.classList.toggle("is-blocked", notificationStatus !== null && !notificationStatus.canTest); }
   const hint = root.querySelector<HTMLElement>("[data-notification-identity]");
   if (hint) hint.hidden = !notificationStatus?.usesSystemIdentity;
   const message = root.querySelector<HTMLElement>("[data-notification-result]");
   if (message) message.textContent = notificationActionMessage;
   root.querySelectorAll<HTMLButtonElement>("[data-notification-test], [data-notification-refresh]").forEach((button) => { button.disabled = notificationBusy || (button.hasAttribute("data-notification-test") && !notificationStatus?.canTest); });
   const warning = root.querySelector<HTMLElement>("[data-reminder-notification-warning]");
-  if (warning) { warning.hidden = notificationStatus === null || notificationStatus.canTest; warning.querySelector<HTMLElement>("p")!.textContent = notificationStatus?.message ?? ""; }
+  if (warning) { warning.hidden = notificationStatus === null || notificationStatus.canTest; warning.querySelector<HTMLElement>("p")!.textContent = backendText(notificationStatus?.message ?? ""); }
 }
 async function refreshNotificationStatus(): Promise<void> {
   if (notificationBusy) return;
@@ -224,13 +262,13 @@ async function refreshNotificationStatus(): Promise<void> {
   finally { notificationBusy = false; updateNotificationControls(); }
 }
 function renderNotificationSettings(): string {
-  return `<section class="settings-section" aria-labelledby="notifications-heading"><h2 id="notifications-heading">Уведомления</h2>
-    <p data-notification-permission role="status" class="${notificationStatus !== null && !notificationStatus.canTest ? "is-blocked" : ""}">${escapeHtml(notificationStatus?.message ?? (notificationReadError || "Проверка состояния…"))}</p>
-    <p>Напоминания работают, пока taskMaster запущен, в том числе в трее.</p>
-    <p data-notification-identity ${notificationStatus?.usesSystemIdentity ? "" : "hidden"}>В этой сборке отправитель — Windows PowerShell.</p>
-    <div class="settings-actions"><button class="retry-button" type="button" data-notification-test ${notificationBusy || !notificationStatus?.canTest ? "disabled" : ""}>Проверить уведомление</button>
-    <button class="retry-button" type="button" data-notification-refresh ${notificationBusy ? "disabled" : ""}>Обновить состояние</button>
-    <button class="retry-button" type="button" data-open-notification-settings>Настройки Windows</button></div>
+  return `<section class="settings-section" aria-labelledby="notifications-heading"><h2 id="notifications-heading">${t("Уведомления")}</h2>
+    <p data-notification-permission role="status" class="${notificationStatus !== null && !notificationStatus.canTest ? "is-blocked" : ""}">${escapeHtml(backendText(notificationStatus?.message ?? (notificationReadError || t("Проверка состояния…"))))}</p>
+    <p>${t("Напоминания работают, пока taskMaster запущен, в том числе в трее.")}</p>
+    <p data-notification-identity ${notificationStatus?.usesSystemIdentity ? "" : "hidden"}>${t("В этой сборке отправитель — Windows PowerShell.")}</p>
+    <div class="settings-actions"><button class="retry-button" type="button" data-notification-test ${notificationBusy || !notificationStatus?.canTest ? "disabled" : ""}>${t("Проверить уведомление")}</button>
+    <button class="retry-button" type="button" data-notification-refresh ${notificationBusy ? "disabled" : ""}>${t("Обновить состояние")}</button>
+    <button class="retry-button" type="button" data-open-notification-settings>${t("Настройки Windows")}</button></div>
     <p role="status" data-notification-result>${escapeHtml(notificationActionMessage)}</p>
   </section>`;
 }
@@ -242,8 +280,8 @@ function bindNotificationControls(): void {
   root.querySelector<HTMLButtonElement>("[data-notification-refresh]")?.addEventListener("click", () => { void refreshNotificationStatus(); });
   root.querySelector<HTMLButtonElement>("[data-notification-test]")?.addEventListener("click", async () => {
     if (notificationBusy) return;
-    notificationBusy = true; notificationActionMessage = "Отправка…"; updateNotificationControls();
-    try { await invoke("send_test_notification"); notificationActionMessage = "Тестовое уведомление отправлено."; }
+    notificationBusy = true; notificationActionMessage = t("Отправка…"); updateNotificationControls();
+    try { await invoke("send_test_notification"); notificationActionMessage = t("Тестовое уведомление отправлено."); }
     catch (error) { notificationActionMessage = backendMessage(error); }
     finally { notificationBusy = false; updateNotificationControls(); void refreshNotificationStatus(); }
   });
@@ -424,7 +462,7 @@ async function completeTaskWithAnimation(task: Task, row: HTMLLIElement, button:
   button.disabled = true;
   button.classList.add("checked", "is-checking");
   button.setAttribute("aria-pressed", "true");
-  button.setAttribute("aria-label", `Выполнена — ${task.title}`);
+  button.setAttribute("aria-label", `${t("Выполнена —")} ${task.title}`);
   const mark = button.querySelector<HTMLElement>("span");
   if (mark) mark.textContent = "✓";
   row.classList.add("is-completing");
@@ -456,7 +494,7 @@ async function reopenTaskWithAnimation(task: Task, row: HTMLLIElement, button: H
   button.disabled = true;
   button.classList.remove("checked");
   button.setAttribute("aria-pressed", "false");
-  button.setAttribute("aria-label", `Вернуть в очередь — ${task.title}`);
+  button.setAttribute("aria-label", `${t("Вернуть в очередь —")} ${task.title}`);
   const mark = button.querySelector<HTMLElement>("span");
   if (mark) mark.textContent = "";
   row.classList.add("is-restoring");
@@ -497,6 +535,7 @@ async function createTask(title: string): Promise<void> {
   render();
   try {
     const created = await invoke<Task>("create_task", { title });
+    announce(t("Задача добавлена"));
     enteringTaskIds.add(created.id);
     saving = false;
     await refreshTasks();
@@ -525,6 +564,7 @@ function applyTheme(): void {
   const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
   document.documentElement.dataset.themeMode = theme;
+  document.documentElement.dataset.contrast = displaySettings.highContrast ? "high" : "normal";
 }
 
 function escapeHtml(value: string): string {
@@ -543,9 +583,9 @@ function escapeHtml(value: string): string {
 function backendMessage(error: unknown): string {
   if (typeof error === "object" && error !== null && "message" in error) {
     const message = (error as BackendError).message;
-    if (typeof message === "string") return message;
+    if (typeof message === "string") return backendText(message);
   }
-  return "Не удалось сохранить изменения. Попробуйте ещё раз.";
+  return t("Не удалось сохранить изменения. Попробуйте ещё раз.");
 }
 
 function activeTasks(): Task[] {
@@ -578,7 +618,7 @@ function monthStart(date: Date): Date {
 }
 
 function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
+  return new Intl.DateTimeFormat(locale(), { hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
 }
 
 function renderCalendar(): string {
@@ -594,29 +634,29 @@ function renderCalendar(): string {
     const disabled = date > todayStart;
     const isToday = value === toLocalDateString(todayStart);
     const hasTasks = createdTaskDays.has(value);
-    return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""} ${hasTasks ? "has-tasks" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat("ru-RU", { dateStyle: "full" }).format(date)}${isToday ? ", сегодня" : ""}${hasTasks ? ", есть задачи" : ""}" ${isToday ? 'aria-current="date"' : ""} ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}><span>${date.getDate()}</span></button>`;
+    return `<button class="calendar-day ${value === selectedHistoryDate ? "is-selected" : ""} ${hasTasks ? "has-tasks" : ""}" type="button" data-calendar-date="${value}" aria-label="${new Intl.DateTimeFormat(locale(), { dateStyle: "full" }).format(date)}${isToday ? `, ${t("сегодня")}` : ""}${hasTasks ? `, ${t("есть задачи")}` : ""}" ${isToday ? 'aria-current="date"' : ""} ${value === selectedHistoryDate ? 'aria-pressed="true"' : ""} ${disabled ? "disabled" : ""}><span>${date.getDate()}</span></button>`;
   }).join("");
   const trailingCells = "<span class=\"calendar-empty\" aria-hidden=\"true\"></span>".repeat(42 - dayOffset - days);
   const cells = `${leadingCells}${dayCells}${trailingCells}`;
   const nextMonthDisabled = first.getFullYear() === today.getFullYear() && first.getMonth() >= today.getMonth();
-  return `<section class="history-calendar" aria-label="Календарь истории">
-    <div class="calendar-heading"><button type="button" data-calendar-shift="-1" aria-label="Предыдущий месяц">←</button><h2>${new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(first)}</h2><button type="button" data-calendar-shift="1" aria-label="Следующий месяц" ${nextMonthDisabled ? "disabled" : ""}>→</button></div>
-    <div class="calendar-grid calendar-weekdays" aria-hidden="true">${["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => `<span>${day}</span>`).join("")}</div>
+  return `<section class="history-calendar" aria-label="${t("Календарь истории")}">
+    <div class="calendar-heading"><button type="button" data-calendar-shift="-1" aria-label="${t("Предыдущий месяц")}">←</button><h2>${new Intl.DateTimeFormat(locale(), { month: "long", year: "numeric" }).format(first)}</h2><button type="button" data-calendar-shift="1" aria-label="${t("Следующий месяц")}" ${nextMonthDisabled ? "disabled" : ""}>→</button></div>
+    <div class="calendar-grid calendar-weekdays" aria-hidden="true">${[t("Пн"), t("Вт"), t("Ср"), t("Чт"), t("Пт"), t("Сб"), t("Вс")].map((day) => `<span>${day}</span>`).join("")}</div>
     <div class="calendar-grid">${cells}</div>
   </section>`;
 }
 
 function renderHistoryColumn(title: string, items: HistoryTask[], type: "completed" | "archived"): string {
   const list = historyLoading
-    ? `<li class="history-empty">Загружаем…</li>`
+    ? `<li class="history-empty">${t("Загружаем…")}</li>`
     : items.length
       ? items.map(({ task, occurredAt, createdAt }) => `<li class="history-task-row ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""}" data-task-id="${task.id}">
           <span class="history-task-copy"><span class="history-task-title">${escapeHtml(task.title)}</span></span>
           <time>${formatTime(type === "completed" ? occurredAt : createdAt)}</time>
-          ${type === "archived" && task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}" aria-label="Восстановить задачу: ${escapeHtml(task.title)}">↶</button>` : ""}
-          <button class="task-delete" type="button" data-purge-task="${task.id}" aria-label="Удалить навсегда: ${escapeHtml(task.title)}" title="Удалить навсегда"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
+          ${type === "archived" && task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}" aria-label="${t("Восстановить задачу:")} ${escapeHtml(task.title)}">↶</button>` : ""}
+          <button class="task-delete" type="button" data-purge-task="${task.id}" aria-label="${t("Удалить навсегда:")} ${escapeHtml(task.title)}" title="${t("Удалить навсегда")}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
         </li>`).join("")
-      : `<li class="history-empty">Нет задач</li>`;
+      : `<li class="history-empty">${t("Нет задач")}</li>`;
   return `<section class="history-column history-column-${type}" aria-labelledby="history-${type}-title">
     <div class="history-column-heading"><h2 id="history-${type}-title">${title}</h2><span>${items.length}</span></div>
     <ul class="history-task-list">${list}</ul>
@@ -624,7 +664,7 @@ function renderHistoryColumn(title: string, items: HistoryTask[], type: "complet
 }
 
 function renderHistoryLists(): string {
-  return `<div class="history-columns">${renderHistoryColumn("Выполнено", historyDay.completed, "completed")}${renderHistoryColumn("Архив", historyDay.archived, "archived")}</div>`;
+  return `<div class="history-columns">${renderHistoryColumn(t("Выполнено"), historyDay.completed, "completed")}${renderHistoryColumn(t("Архив"), historyDay.archived, "archived")}</div>`;
 }
 
 function completedTodayTasks(): Task[] {
@@ -637,21 +677,21 @@ function renderTask(task: Task, index: number, completed = false): string {
   const position = String(index + 1).padStart(2, "0");
   const title = isEditing
     ? `<form class="rename-form" data-rename-form="${task.id}">
-        <input class="rename-input" name="title" aria-label="Новое название задачи" value="${escapeHtml(task.title)}" required />
+        <input class="rename-input" name="title" aria-label="${t("Новое название задачи")}" value="${escapeHtml(task.title)}" required />
       </form>`
     : `<span class="task-title">${escapeHtml(task.title)}</span>`;
 
   return `
-    <li class="task-row ${completed ? "is-completed" : ""} ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="${shortcuts.move_up} ${shortcuts.move_down} ${shortcuts.rename}" aria-label="${escapeHtml(task.title)}. ${escapeHtml(displayShortcut(shortcuts.move_up))} и ${escapeHtml(displayShortcut(shortcuts.move_down))} меняют порядок. ${escapeHtml(displayShortcut(shortcuts.rename))} изменяет название."`}>
-      <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="Задача ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
+    <li class="task-row ${completed ? "is-completed" : ""} ${highlightedReminderTaskId === task.id ? "is-reminder-highlighted" : ""} ${taskAnimationLocks.has(task.id) ? "is-task-animating" : ""}" data-task-id="${task.id}" data-reorderable="${!completed}" ${completed ? "" : `tabindex="0" aria-keyshortcuts="${shortcuts.move_up} ${shortcuts.move_down} ${shortcuts.rename}" aria-label="${escapeHtml(task.title)}. ${escapeHtml(displayShortcut(shortcuts.move_up))} ${t("и")} ${escapeHtml(displayShortcut(shortcuts.move_down))} ${t("меняют порядок.")} ${escapeHtml(displayShortcut(shortcuts.rename))} ${t("изменяет название.")}"`}>
+      <span class="task-position ${completed ? "completed-position" : ""}" data-position="${position}" aria-label="${t("Задача")} ${index + 1}"><span class="position-old" aria-hidden="true"></span><span class="position-current">${position}</span></span>
       <button class="task-check ${completed ? "checked" : ""}" type="button"
-        data-toggle-task="${task.id}" aria-label="${completed ? "Вернуть в очередь" : "Отметить выполненной"} — ${escapeHtml(task.title)}"
+        data-toggle-task="${task.id}" aria-label="${completed ? t("Вернуть в очередь") : t("Отметить выполненной")} — ${escapeHtml(task.title)}"
         aria-pressed="${completed}" ${saving || taskAnimationLocks.has(task.id) ? "disabled" : ""}>
         <span aria-hidden="true">${completed ? "✓" : ""}</span>
       </button>
       <div class="task-content">${title}</div>
-      ${completed ? "" : `<button class="reminder-button ${task.reminderAt !== null ? "has-reminder" : ""}" type="button" data-edit-reminder="${task.id}" aria-label="${task.reminderAt !== null ? `Изменить напоминание: ${escapeHtml(task.title)}` : `Добавить напоминание: ${escapeHtml(task.title)}`}">${task.reminderAt !== null ? `<time>${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(task.reminderAt)}</time>` : "◷"}</button>`}
-      <button class="task-delete" type="button" data-delete-task="${task.id}" aria-label="Удалить задачу: ${escapeHtml(task.title)}" title="Удалить задачу" ${saving || taskAnimationLocks.has(task.id) ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"/></svg></button>
+      ${completed ? "" : `<button class="reminder-button ${task.reminderAt !== null ? "has-reminder" : ""}" type="button" data-edit-reminder="${task.id}" aria-label="${task.reminderAt !== null ? `${t("Изменить напоминание:")} ${escapeHtml(task.title)}` : `${t("Добавить напоминание:")} ${escapeHtml(task.title)}`}">${task.reminderAt !== null ? `<time>${new Intl.DateTimeFormat(locale(), { hour: "2-digit", minute: "2-digit" }).format(task.reminderAt)}</time>` : "◷"}</button>`}
+      <button class="task-delete" type="button" data-delete-task="${task.id}" aria-label="${t("Удалить задачу:")} ${escapeHtml(task.title)}" title="${t("Удалить задачу")}" ${saving || taskAnimationLocks.has(task.id) ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"/></svg></button>
     </li>`;
 }
 
@@ -659,13 +699,13 @@ function timerCard(timer: Timer, fullscreen = false, overlay = false): string {
   const progress = timer.durationSeconds > 0 ? timer.remainingSeconds / timer.durationSeconds : 0;
   const circumference = 2 * Math.PI * 86;
   const ring = `<svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true"><circle class="timer-ring-track" cx="100" cy="100" r="86"/><circle class="timer-ring-progress" cx="100" cy="100" r="86" stroke-dasharray="${circumference} ${circumference}" stroke-dashoffset="${circumference * (1 - progress)}"/></svg>`;
-  return `<article class="timer-card ${fullscreen ? "timer-card-focus" : ""} ${overlay ? "timer-card-overlay" : ""}" data-timer-card="${timer.id}" data-timer-status="${timer.status}">
-    <div class="timer-card-heading"><h2>${escapeHtml(timer.name)}</h2>${overlay ? `<div class="timer-card-actions"><button type="button" data-hide-overlay-timer="${timer.id}" aria-label="Скрыть таймер из оверлея" title="Скрыть из оверлея">×</button></div>` : `<div class="timer-card-actions">${fullscreen ? '<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="Выйти из полноэкранного режима"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>' : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="Открыть на весь экран">⛶</button><button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="Удалить таймер">×</button>`}</div>`}</div>
-    <div class="timer-dial">${ring}<strong class="timer-clock" data-timer-clock>${formatTimerTime(timer.remainingSeconds)}</strong></div>
+  return `<article class="timer-card ${fullscreen ? "timer-card-focus" : ""} ${overlay ? "timer-card-overlay" : ""}" aria-labelledby="timer-label-${timer.id}" data-timer-card="${timer.id}" data-timer-status="${timer.status}">
+    <div class="timer-card-heading"><h2 id="timer-label-${timer.id}">${escapeHtml(timer.name)}</h2>${overlay ? `<div class="timer-card-actions"><button type="button" data-hide-overlay-timer="${timer.id}" aria-label="${t("Скрыть таймер из оверлея")}" title="${t("Скрыть из оверлея")}">×</button></div>` : `<div class="timer-card-actions">${fullscreen ? `<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="${t("Выйти из полноэкранного режима")}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>` : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="${t("Открыть на весь экран")}">⛶</button><button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="${t("Удалить таймер")}">×</button>`}</div>`}</div>
+    <div class="timer-dial">${ring}<strong class="timer-clock" role="timer" aria-live="off" data-timer-clock>${formatTimerTime(timer.remainingSeconds)}</strong></div>
     <div class="timer-footer">
       <div class="timer-controls">
-        ${timer.status === "running" ? `<button type="button" data-timer-action="pause" data-timer-id="${timer.id}" aria-label="Пауза">Ⅱ</button>` : `<button type="button" data-timer-action="start" data-timer-id="${timer.id}" aria-label="${timer.status === "finished" ? "Запустить заново" : "Запустить"}">${timer.status === "finished" ? "↻" : "▶"}</button>`}
-        <button type="button" data-timer-action="reset" data-timer-id="${timer.id}" aria-label="Сбросить таймер">↶</button>
+        ${timer.status === "running" ? `<button type="button" data-timer-action="pause" data-timer-id="${timer.id}" aria-label="${t("Пауза")}">Ⅱ</button>` : `<button type="button" data-timer-action="start" data-timer-id="${timer.id}" aria-label="${timer.status === "finished" ? t("Запустить заново") : t("Запустить")}">${timer.status === "finished" ? "↻" : "▶"}</button>`}
+        <button type="button" data-timer-action="reset" data-timer-id="${timer.id}" aria-label="${t("Сбросить таймер")}">↶</button>
       </div>
     </div>
   </article>`;
@@ -673,31 +713,31 @@ function timerCard(timer: Timer, fullscreen = false, overlay = false): string {
 
 function renderSidebar(): string {
   const sections: { view: View; label: string; count?: number }[] = [
-    { view: "today", label: "Сегодня", count: activeTasks().length },
-    { view: "completed", label: "Выполнено", count: completedTodayTasks().length },
-    { view: "history", label: "История" },
-    { view: "timers", label: "Таймеры" },
+    { view: "today", label: t("Сегодня"), count: activeTasks().length },
+    { view: "completed", label: t("Выполнено"), count: completedTodayTasks().length },
+    { view: "history", label: t("История") },
+    { view: "timers", label: t("Таймеры") },
   ];
-  return `<aside class="sidebar" aria-label="taskMaster"><nav class="navigation" aria-label="Разделы">
+  return `<aside class="sidebar" aria-label="taskMaster"><nav class="navigation" aria-label="${t("Разделы")}">
     ${sections.map(({ view, label, count }, index) => `<a class="nav-item ${activeView === view ? "is-current" : ""}" href="#${view}" data-view="${view}" ${activeView === view ? 'aria-current="page"' : ""}><span class="nav-index">${String(index + 1).padStart(2, "0")}</span>${label}${count === undefined ? "" : `<span class="nav-count">${count}</span>`}</a>`).join("")}
-  </nav><button class="theme-switch" type="button" data-view="settings" ${activeView === "settings" ? 'aria-current="page"' : ""} aria-label="Настройки"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">Настройки</span></button></aside>`;
+  </nav><button class="theme-switch" type="button" data-view="settings" ${activeView === "settings" ? 'aria-current="page"' : ""} aria-label="${t("Настройки")}"><span class="theme-icon" aria-hidden="true">⚙</span><span class="theme-copy">${t("Настройки")}</span></button></aside>`;
 }
 
 function renderBackupSettings(): string {
-  return `<section class="settings-section" aria-labelledby="backup-heading"><h2 id="backup-heading">Резервные копии</h2>
-    <p>Ежедневные копии создаются при запуске. Хранятся последние семь.</p>
-    ${backupStatus?.warning ? `<p class="backup-warning" role="alert">${escapeHtml(backupStatus.warning)}</p>` : ""}
+  return `<section class="settings-section" aria-labelledby="backup-heading"><h2 id="backup-heading">${t("Резервные копии")}</h2>
+    <p>${t("Ежедневные копии создаются при запуске. Хранятся последние семь.")}</p>
+    ${backupStatus?.warning ? `<p class="backup-warning" role="alert">${escapeHtml(backendText(backupStatus.warning))}</p>` : ""}
     <div class="backup-actions">
-      <button class="retry-button" type="button" data-backup-action="create" ${backupBusy || !backupStatus?.databaseAvailable ? "disabled" : ""}>Создать резервную копию</button>
-      <button class="retry-button" type="button" data-backup-action="choose" ${backupBusy || !backupStatus ? "disabled" : ""}>Восстановить из файла</button>
-      <button class="retry-button" type="button" data-backup-action="latest" ${backupBusy || !backupStatus?.hasDailyCopy ? "disabled" : ""}>Восстановить последнюю ежедневную</button>
-      <button class="retry-button" type="button" data-backup-action="folder" ${backupBusy || !backupStatus ? "disabled" : ""}>Открыть папку данных</button>
+      <button class="retry-button" type="button" data-backup-action="create" ${backupBusy || !backupStatus?.databaseAvailable ? "disabled" : ""}>${t("Создать резервную копию")}</button>
+      <button class="retry-button" type="button" data-backup-action="choose" ${backupBusy || !backupStatus ? "disabled" : ""}>${t("Восстановить из файла")}</button>
+      <button class="retry-button" type="button" data-backup-action="latest" ${backupBusy || !backupStatus?.hasDailyCopy ? "disabled" : ""}>${t("Восстановить последнюю ежедневную")}</button>
+      <button class="retry-button" type="button" data-backup-action="folder" ${backupBusy || !backupStatus ? "disabled" : ""}>${t("Открыть папку данных")}</button>
     </div><p role="status" aria-live="polite">${escapeHtml(backupMessage)}</p>
-    ${restorePreview ? `<dialog class="reminder-dialog backup-confirm" data-restore-dialog aria-labelledby="restore-heading"><form data-restore-confirm><h2 id="restore-heading">Восстановить данные?</h2>
+    ${restorePreview ? `<dialog class="reminder-dialog backup-confirm" data-restore-dialog aria-labelledby="restore-heading"><form data-restore-confirm><h2 id="restore-heading">${t("Восстановить данные?")}</h2>
       <p class="backup-source">${escapeHtml(restorePreview.source)}</p>
-      <dl class="backup-summary"><dt>Задачи</dt><dd>${restorePreview.tasks}</dd><dt>События истории</dt><dd>${restorePreview.events}</dd><dt>Таймеры</dt><dd>${restorePreview.timers}</dd></dl>
-      <p>Текущие задачи, история, таймеры и настройки задач будут заменены. Перед заменой текущие данные будут сохранены отдельно.</p>
-      <div class="reminder-actions"><button type="button" data-cancel-restore ${backupBusy ? "disabled" : ""}>Отмена</button><button type="submit" ${backupBusy ? "disabled" : ""}>${backupBusy ? "Восстановление…" : "Восстановить"}</button></div>
+      <dl class="backup-summary"><dt>${t("Задачи")}</dt><dd>${restorePreview.tasks}</dd><dt>${t("События истории")}</dt><dd>${restorePreview.events}</dd><dt>${t("Таймеры")}</dt><dd>${restorePreview.timers}</dd></dl>
+      <p>${t("Текущие задачи, история, таймеры и настройки задач будут заменены. Перед заменой текущие данные будут сохранены отдельно.")}</p>
+      <div class="reminder-actions"><button type="button" data-cancel-restore ${backupBusy ? "disabled" : ""}>${t("Отмена")}</button><button type="submit" ${backupBusy ? "disabled" : ""}>${backupBusy ? t("Восстановление…") : t("Восстановить")}</button></div>
     </form></dialog>` : ""}
   </section>`;
 }
@@ -706,10 +746,10 @@ function bindBackupSettings(): void {
   root.querySelectorAll<HTMLButtonElement>("[data-backup-action]").forEach((button) => button.addEventListener("click", async () => {
     if (backupBusy) return;
     const action = button.dataset.backupAction;
-    backupBusy = true; backupMessage = action === "create" ? "Создание копии…" : action === "folder" ? "" : "Проверка копии…"; render(true);
+    backupBusy = true; backupMessage = action === "create" ? t("Создание копии…") : action === "folder" ? "" : t("Проверка копии…"); render(true);
     try {
       if (action === "folder") { await invoke("open_data_directory"); }
-      else if (action === "create") { const path = await invoke<string | null>("create_database_backup"); backupMessage = path ? `Копия сохранена: ${path}` : ""; }
+      else if (action === "create") { const path = await invoke<string | null>("create_database_backup"); backupMessage = path ? `${t("Копия сохранена:")} ${path}` : ""; }
       else { restorePreview = await invoke<RestorePreview | null>("prepare_database_restore", { latest: action === "latest" }); backupMessage = ""; }
     } catch (error) { backupMessage = backendMessage(error); }
     finally { backupBusy = false; render(true); }
@@ -720,7 +760,7 @@ function bindBackupSettings(): void {
   dialog?.addEventListener("cancel", (event) => { event.preventDefault(); cancel(); });
   root.querySelector<HTMLFormElement>("[data-restore-confirm]")?.addEventListener("submit", async (event) => {
     event.preventDefault(); if (!restorePreview || backupBusy) return;
-    const token = restorePreview.token; backupBusy = true; backupMessage = "Восстановление…"; render(true);
+    const token = restorePreview.token; backupBusy = true; backupMessage = t("Восстановление…"); render(true);
     let restoredPath: string | null = null;
     try {
       const path = await invoke<string>("confirm_database_restore", { token });
@@ -730,9 +770,9 @@ function bindBackupSettings(): void {
       await Promise.all([refreshTasks(), refreshTimers(false), loadShortcuts(), refreshDeletionUndos()]);
       const overlayStatus = await invoke<OverlayShortcutStatus>("get_overlay_shortcut_status");
       overlayShortcut = overlayStatus.shortcut; overlayShortcutAvailable = overlayStatus.available;
-      backupMessage = `Данные восстановлены. Предыдущие данные сохранены: ${path}`;
+      backupMessage = `${t("Данные восстановлены. Предыдущие данные сохранены:")} ${path}`;
       await refreshBackupStatus();
-    } catch (error) { restorePreview = null; backupMessage = restoredPath ? `Данные восстановлены, но интерфейс не удалось обновить. Перезапустите приложение. Предыдущие данные: ${restoredPath}` : backendMessage(error); }
+    } catch (error) { restorePreview = null; backupMessage = restoredPath ? `${t("Данные восстановлены, но интерфейс не удалось обновить. Перезапустите приложение. Предыдущие данные:")} ${restoredPath}` : backendMessage(error); }
     finally { backupBusy = false; render(true); }
   });
   if (dialog && !dialog.open) dialog.showModal();
@@ -740,15 +780,15 @@ function bindBackupSettings(): void {
 
 type ClearMode = "tasks" | "allData";
 let clearingData = false;
-function openClearData(mode: ClearMode, trigger: HTMLButtonElement): void {
+function openClearData(mode: ClearMode): void {
   if (clearingData || document.querySelector("[data-clear-dialog]")) return;
   const dialog = document.createElement("dialog");
   dialog.className = "reminder-dialog";
   dialog.dataset.clearDialog = "";
   dialog.setAttribute("aria-labelledby", "clear-heading");
   dialog.setAttribute("aria-describedby", "clear-description");
-  dialog.innerHTML = `<form><h2 id="clear-heading">${mode === "tasks" ? "Очистить задачи?" : "Сбросить данные?"}</h2><p id="clear-description">${mode === "tasks" ? "Все задачи, архив, история и напоминания будут удалены." : "Все задачи, архив, история, напоминания и таймеры будут удалены."} Отменить действие нельзя. Настройки и существующие резервные копии сохранятся. Новая копия не создаётся.</p><p role="alert" data-clear-error></p><div class="reminder-actions"><button type="button" data-clear-cancel autofocus>Отмена</button><button type="submit" class="danger-action">${mode === "tasks" ? "Очистить задачи" : "Сбросить данные"}</button></div></form>`;
-  const close = (): void => { if (clearingData) return; dialog.close(); dialog.remove(); trigger.focus({ preventScroll: true }); };
+  dialog.innerHTML = `<form><h2 id="clear-heading">${mode === "tasks" ? t("Очистить задачи?") : t("Сбросить данные?")}</h2><p id="clear-description">${mode === "tasks" ? t("Все задачи, архив, история и напоминания будут удалены.") : t("Все задачи, архив, история, напоминания и таймеры будут удалены.")} ${t("Отменить действие нельзя. Настройки и существующие резервные копии сохранятся. Новая копия не создаётся.")}</p><p role="alert" data-clear-error></p><div class="reminder-actions"><button type="button" data-clear-cancel autofocus>${t("Отмена")}</button><button type="submit" class="danger-action">${mode === "tasks" ? t("Очистить задачи") : t("Сбросить данные")}</button></div></form>`;
+  const close = (): void => { if (clearingData) return; dialog.close(); dialog.remove(); root.querySelector<HTMLButtonElement>(`[data-clear-data="${mode}"]`)?.focus({ preventScroll: true }); };
   dialog.querySelector("[data-clear-cancel]")!.addEventListener("click", close);
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
   dialog.querySelector("form")!.addEventListener("submit", async (event) => {
@@ -770,31 +810,33 @@ function openClearData(mode: ClearMode, trigger: HTMLButtonElement): void {
 function renderSettings(): void {
   const previousScrollTop = root.querySelector<HTMLElement>(".settings-view")?.scrollTop ?? 0;
   root.innerHTML = `<div class="app-shell">${renderSidebar()}
-  <main class="main-content settings-view"><h1>Настройки<span class="heading-period">.</span></h1>
-    <section class="settings-section" aria-labelledby="theme-heading"><h2 id="theme-heading">Оформление</h2><label for="settings-theme">Тема</label>
+  <main id="settings" class="main-content settings-view"><h1>${t("Настройки")}<span class="heading-period">.</span></h1>
+    <section class="settings-section" aria-labelledby="theme-heading"><h2 id="theme-heading">${t("Оформление")}</h2><label for="settings-theme">${t("Тема")}</label>
     <select id="settings-theme" data-theme-select>${themeOrder.map((value) => `<option value="${value}" ${theme === value ? "selected" : ""}>${themeLabels[value]}</option>`).join("")}</select>
-    <p role="alert" data-settings-error></p></section>
+    <label for="settings-language">${t("Язык")}</label><select id="settings-language" data-language-select ${displaySettingsReady ? "" : "disabled"}>${languages.map((value) => `<option value="${value}" ${language() === value ? "selected" : ""}>${languageNames[value]}</option>`).join("")}</select>
+    <label class="settings-check"><input id="settings-contrast" type="checkbox" data-high-contrast ${displaySettings.highContrast ? "checked" : ""} ${displaySettingsReady ? "" : "disabled"}/><span>${t("Высокий контраст")}</span></label>
+    <p role="alert" data-settings-error>${escapeHtml(displaySettingsError)}</p></section>
     ${renderAutostartSettings()}
     ${renderNotificationSettings()}
-    <section class="settings-section"><h2>Задачи</h2><form data-preferences-form>
-      <label for="reminder-minutes">Время до напоминания, минуты</label><input id="reminder-minutes" name="reminderMinutes" type="number" min="1" max="1439" step="1" required value="${preferences.reminderMinutes}" ${preferencesReady ? "" : "disabled"}/>
-      <label for="archive-hours">Архивировать через, часы</label><input id="archive-hours" name="archiveHours" type="number" min="1" max="8760" step="1" required value="${preferences.archiveHours}" ${preferencesReady ? "" : "disabled"}/>
-      <p>Срок отсчитывается от создания задачи. Архив сохраняет задачи и историю.</p>
-      <button class="retry-button" type="submit" ${preferencesReady ? "" : "disabled"}>Сохранить</button><p role="status" data-preferences-status>${escapeHtml(preferencesError)}</p>
+    <section class="settings-section"><h2>${t("Задачи")}</h2><form data-preferences-form>
+      <label for="reminder-minutes">${t("Время до напоминания, минуты")}</label><input id="reminder-minutes" name="reminderMinutes" type="number" min="1" max="1439" step="1" required value="${preferences.reminderMinutes}" ${preferencesReady ? "" : "disabled"}/>
+      <label for="archive-hours">${t("Архивировать через, часы")}</label><input id="archive-hours" name="archiveHours" type="number" min="1" max="8760" step="1" required value="${preferences.archiveHours}" ${preferencesReady ? "" : "disabled"}/>
+      <p>${t("Срок отсчитывается от создания задачи. Архив сохраняет задачи и историю.")}</p>
+      <button class="retry-button" type="submit" ${preferencesReady ? "" : "disabled"}>${t("Сохранить")}</button><p role="status" data-preferences-status>${escapeHtml(preferencesError)}</p>
     </form></section>
-    <section class="settings-section shortcut-section" aria-labelledby="shortcuts-heading"><h2 id="shortcuts-heading">Горячие клавиши</h2>
-      <p>Нажмите поле и сочетание клавиш, затем сохраните. Escape отменяет ввод. Команды задач работают при фокусе на строке.</p>
+    <section class="settings-section shortcut-section" aria-labelledby="shortcuts-heading"><h2 id="shortcuts-heading">${t("Горячие клавиши")}</h2>
+      <p>${t("Нажмите поле и сочетание клавиш, затем сохраните. Escape отменяет ввод. Команды задач работают при фокусе на строке.")}</p>
       <p role="alert">${escapeHtml(shortcutsError)}</p>
-      <div class="shortcut-table" role="table" aria-label="Горячие клавиши">
+      <div class="shortcut-table" role="group" aria-label="${t("Горячие клавиши")}">
       ${([...Object.keys(shortcutLabels), "overlay"] as (ShortcutAction | "overlay")[]).map((action) => {
         const value = action === "overlay" ? overlayShortcut : shortcuts[action];
-        return `<form class="shortcut-row" role="row" data-shortcut-form="${action}"><div role="cell"><label for="shortcut-${action}">${action === "overlay" ? "Показать / скрыть оверлей" : shortcutLabels[action]}</label><small>${action === "overlay" ? "Глобально" : "В приложении"}</small></div><div role="cell"><input id="shortcut-${action}" data-shortcut-capture data-combination="${escapeHtml(value)}" value="${escapeHtml(displayShortcut(value))}" readonly aria-label="Сочетание: ${action === "overlay" ? "Оверлей" : shortcutLabels[action]}" ${shortcutsReady ? "" : "disabled"}/></div><div role="cell"><button class="retry-button" type="submit" ${shortcutsReady ? "" : "disabled"}>Сохранить</button></div><p role="status" data-shortcut-status>${action === "overlay" && !overlayShortcutAvailable ? "Не удалось зарегистрировать сочетание. Выберите другое." : ""}</p></form>`;
+        return `<form class="shortcut-row" aria-label="${action === "overlay" ? t("Оверлей") : shortcutLabels[action]}" data-shortcut-form="${action}"><div><label for="shortcut-${action}">${action === "overlay" ? t("Показать / скрыть оверлей") : shortcutLabels[action]}</label><small>${action === "overlay" ? t("Глобально") : t("В приложении")}</small></div><div><input id="shortcut-${action}" data-shortcut-capture data-combination="${escapeHtml(value)}" value="${escapeHtml(displayShortcut(value))}" readonly aria-label="${t("Сочетание:")} ${action === "overlay" ? t("Оверлей") : shortcutLabels[action]}" ${shortcutsReady ? "" : "disabled"}/></div><div><button class="retry-button" type="submit" ${shortcutsReady ? "" : "disabled"}>${t("Сохранить")}</button></div><p role="status" data-shortcut-status>${action === "overlay" && !overlayShortcutAvailable ? t("Не удалось зарегистрировать сочетание. Выберите другое.") : ""}</p></form>`;
       }).join("")}</div>
     </section>
     ${renderBackupSettings()}
-    <section class="settings-section"><h2>Данные</h2><button class="retry-button" type="button" data-export-json>Выгрузить JSON в Загрузки</button><p role="status" data-export-status></p><div class="settings-actions"><button type="button" class="danger-action" data-clear-data="tasks" ${loadFailed ? "disabled" : ""}>Очистить задачи</button><button type="button" class="danger-action" data-clear-data="allData" ${loadFailed ? "disabled" : ""}>Сбросить данные</button></div></section>
-    <section class="settings-section"><h2>Диагностика</h2><p>Журналы находятся в папке данных → logs. Хранятся четыре файла до 256 КБ каждый, без названий задач и таймеров.</p><p role="alert" data-diagnostics-warning></p></section>
-    <section class="settings-section"><h2>О приложении</h2><p class="about-links"><a href="https://taskmaster339.github.io/" data-about-link>Персональный сайт</a><a href="https://github.com/TAskMAster339/taskMaster" data-about-link>GitHub</a></p><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
+    <section class="settings-section"><h2>${t("Данные")}</h2><button class="retry-button" type="button" data-export-json>${t("Выгрузить JSON в Загрузки")}</button><p role="status" data-export-status></p><div class="settings-actions"><button type="button" class="danger-action" data-clear-data="tasks" ${loadFailed ? "disabled" : ""}>${t("Очистить задачи")}</button><button type="button" class="danger-action" data-clear-data="allData" ${loadFailed ? "disabled" : ""}>${t("Сбросить данные")}</button></div></section>
+    <section class="settings-section"><h2>${t("Диагностика")}</h2><p>${t("Журналы находятся в папке данных → logs. Хранятся четыре файла до 256 КБ каждый, без названий задач и таймеров.")}</p><p role="alert" data-diagnostics-warning></p></section>
+    <section class="settings-section"><h2>${t("О приложении")}</h2><p class="about-links"><a href="https://taskmaster339.github.io/" data-about-link>${t("Персональный сайт")}</a><a href="https://github.com/TAskMAster339/taskMaster" data-about-link>GitHub</a></p><p>taskMaster${appVersion ? ` · ${escapeHtml(appVersion)}` : ""}</p>${appVersionError ? `<p role="alert">${escapeHtml(appVersionError)}</p>` : ""}</section>
   </main></div>`;
   bindEvents();
   bindBackupSettings();
@@ -819,7 +861,7 @@ function renderSettings(): void {
     try {
       if (action === "overlay") { const result = await invoke<OverlayShortcutStatus>("set_overlay_shortcut", { shortcut: input.dataset.combination }); overlayShortcut = result.shortcut; overlayShortcutAvailable = result.available; }
       else shortcuts = await invoke<typeof shortcuts>("update_shortcut", { action, combination: input.dataset.combination });
-      status.textContent = "Сохранено";
+      status.textContent = t("Сохранено");
     } catch (error) { status.textContent = backendMessage(error); }
     finally { button.disabled = false; input.disabled = false; }
   }));
@@ -828,58 +870,90 @@ function renderSettings(): void {
     const values = new FormData(form); const next = { reminderMinutes: Number(values.get("reminderMinutes")), archiveHours: Number(values.get("archiveHours")) };
     const button = form.querySelector<HTMLButtonElement>("button")!; button.disabled = true;
     const status = form.querySelector<HTMLElement>("[data-preferences-status]")!;
-    try { await invoke("update_preferences", next); preferences = next; status.textContent = "Сохранено"; }
+    try { await invoke("update_preferences", next); preferences = next; status.textContent = t("Сохранено"); }
     catch (error) { status.textContent = backendMessage(error); }
     finally { button.disabled = false; }
   });
   root.querySelector<HTMLButtonElement>("[data-export-json]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget as HTMLButtonElement; button.disabled = true;
     const status = root.querySelector<HTMLElement>("[data-export-status]")!;
-    try { const path = await invoke<string>("export_user_data", { theme }); status.textContent = `Сохранено: ${path}`; }
+    try { const path = await invoke<string>("export_user_data", { theme }); status.textContent = `${t("Сохранено:")} ${path}`; }
     catch (error) { status.textContent = backendMessage(error); }
     finally { button.disabled = false; }
   });
   root.querySelector<HTMLSelectElement>("[data-theme-select]")?.addEventListener("change", (event) => {
     const value = (event.target as HTMLSelectElement).value as Theme;
     try { localStorage.setItem(themeStorageKey, value); theme = value; applyTheme(); }
-    catch { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = "Не удалось сохранить тему. Повторите попытку."; }
+    catch { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = t("Не удалось сохранить тему. Повторите попытку."); }
   });
-  root.querySelectorAll<HTMLButtonElement>("[data-clear-data]").forEach((button) => button.addEventListener("click", () => openClearData(button.dataset.clearData as ClearMode, button)));
+  root.querySelectorAll<HTMLButtonElement>("[data-clear-data]").forEach((button) => button.addEventListener("click", () => openClearData(button.dataset.clearData as ClearMode)));
   root.querySelectorAll<HTMLAnchorElement>("[data-about-link]").forEach((link) => link.addEventListener("click", async (event) => {
     event.preventDefault();
     try { await invoke("open_about_link", { url: link.href }); }
     catch (error) { root.querySelector<HTMLElement>("[data-settings-error]")!.textContent = backendMessage(error); }
   }));
+  root.querySelector<HTMLSelectElement>("[data-language-select]")?.addEventListener("change", (event) => { void saveDisplaySettings({ ...displaySettings, language: (event.target as HTMLSelectElement).value as Language }); });
+  root.querySelector<HTMLInputElement>("[data-high-contrast]")?.addEventListener("change", (event) => { void saveDisplaySettings({ ...displaySettings, highContrast: (event.target as HTMLInputElement).checked }); });
   const settingsPage = root.querySelector<HTMLElement>(".settings-view");
   if (settingsPage) settingsPage.scrollTop = previousScrollTop;
   void refreshDiagnosticsWarning();
 }
+
+function applyDisplaySettings(next: DisplaySettings): void {
+  const changed = next.language !== displaySettings.language || next.highContrast !== displaySettings.highContrast;
+  displaySettings = next; setLanguage(next.language); document.documentElement.lang = next.language;
+  skipLink.textContent = t("Перейти к содержимому"); applyTheme();
+  if (changed && getCurrentWindow().label !== "overlay") {
+    const focusedId = (document.activeElement as HTMLElement | null)?.id;
+    render(true); renderDeletionUndos();
+    if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+    void refreshNotificationStatus();
+  }
+}
+async function saveDisplaySettings(next: DisplaySettings): Promise<void> {
+  root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-language-select], [data-high-contrast]").forEach((control) => { control.disabled = true; });
+  try {
+    const previous = displaySettings;
+    const saved = await invoke<DisplaySettings>("update_display_settings", { settings: next });
+    displaySettingsError = ""; applyDisplaySettings(saved);
+    announce(previous.language !== next.language ? t("Язык изменён") : t("Контраст изменён"));
+  } catch (error) { displaySettingsError = backendMessage(error); }
+  finally {
+    const focusedId = (document.activeElement as HTMLElement | null)?.id;
+    render(true); if (focusedId) document.getElementById(focusedId)?.focus({ preventScroll: true });
+  }
+}
+void listen<DisplaySettings>("display-settings-changed", ({ payload }) => applyDisplaySettings(payload));
+window.addEventListener("storage", (event) => { if (event.key === themeStorageKey) { theme = readTheme(); applyTheme(); } });
 
 async function refreshDiagnosticsWarning(): Promise<void> {
   let warning: string | null;
   try { warning = await invoke<string | null>("get_diagnostics_warning"); }
   catch (error) { warning = backendMessage(error); }
   const status = root.querySelector<HTMLElement>("[data-diagnostics-warning]");
-  if (status) status.textContent = warning ?? "";
+  if (status) status.textContent = backendText(warning ?? "");
 }
 
 function renderTimers(): void {
+  const restoreFocus = preserveTimerFocus(root);
   const focused = timers.find((timer) => timer.id === fullscreenTimerId);
   root.innerHTML = `<div class="app-shell ${focused ? "is-timer-fullscreen" : ""}">
     ${focused ? "" : renderSidebar()}
     <main class="main-content timer-view ${focused ? "timer-view-fullscreen" : ""}" id="timers">
-      ${focused ? `${timerCard(focused, true)}<p class="error-banner" role="alert" ${timerError ? "" : "hidden"}>${escapeHtml(timerError)}</p>` : `<header class="timer-page-heading"><div><p class="eyebrow">ИНСТРУМЕНТЫ</p><h1>Таймеры<span class="heading-period">.</span></h1></div><button class="add-button timer-add-button" type="button" data-add-timer aria-label="Добавить таймер">＋</button></header>
+      ${focused ? `${timerCard(focused, true)}<p class="error-banner" role="alert" ${timerError ? "" : "hidden"}>${escapeHtml(timerError)}</p>` : `<header class="timer-page-heading"><div><p class="eyebrow">${t("ИНСТРУМЕНТЫ")}</p><h1>${t("Таймеры")}<span class="heading-period">.</span></h1></div><button class="add-button timer-add-button" type="button" data-add-timer aria-label="${t("Добавить таймер")}">＋</button></header>
       <p class="error-banner" role="alert" ${timerError ? "" : "hidden"}>${escapeHtml(timerError)}</p>
-      <div class="timer-grid">${timers.length ? timers.map((timer) => timerCard(timer)).join("") : '<div class="empty-state"><strong>Таймеров пока нет</strong><button class="retry-button" type="button" data-add-timer>Добавить таймер</button></div>'}</div>
-      ${timerDialogOpen ? `<dialog class="reminder-dialog timer-dialog" data-timer-dialog><form data-timer-form><h2>Добавить таймер</h2><label for="timer-hours">Длительность</label><div class="timer-duration-fields"><input id="timer-hours" type="number" name="hours" min="0" max="99" value="00" aria-label="Часы" required/><span>:</span><input type="number" name="minutes" min="0" max="59" value="00" aria-label="Минуты" required/><span>:</span><input type="number" name="seconds" min="0" max="59" value="00" aria-label="Секунды" required/></div><label for="timer-name">Название</label><input id="timer-name" name="name" type="text" maxlength="80" value="Таймер (${timers.length + 1})" required/><p class="reminder-dialog-error" role="alert">${escapeHtml(timerError)}</p><div class="reminder-actions"><button type="button" data-close-timer>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>` : ""}`}
-    </main><span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span></div>`;
+      <div class="timer-grid">${timers.length ? timers.map((timer) => timerCard(timer)).join("") : `<div class="empty-state"><strong>${t("Таймеров пока нет")}</strong><button class="retry-button" type="button" data-add-timer>${t("Добавить таймер")}</button></div>`}</div>
+      ${timerDialogOpen ? `<dialog class="reminder-dialog timer-dialog" data-timer-dialog aria-labelledby="timer-heading"><form data-timer-form><h2 id="timer-heading">${t("Добавить таймер")}</h2><label for="timer-hours">${t("Длительность")}</label><div class="timer-duration-fields"><input id="timer-hours" type="number" name="hours" min="0" max="99" value="00" aria-label="${t("Часы")}" required/><span>:</span><input type="number" name="minutes" min="0" max="59" value="00" aria-label="${t("Минуты")}" required/><span>:</span><input type="number" name="seconds" min="0" max="59" value="00" aria-label="${t("Секунды")}" required/></div><label for="timer-name">${t("Название")}</label><input id="timer-name" name="name" type="text" maxlength="80" value="${t("Таймер (")}${timers.length + 1})" required/><p class="reminder-dialog-error" role="alert">${escapeHtml(timerError)}</p><div class="reminder-actions"><button type="button" data-close-timer>${t("Отмена")}</button><button type="submit">${t("Сохранить")}</button></div></form></dialog>` : ""}`}
+    </main></div>`;
   bindEvents();
   animateTimerFrames();
+  restoreFocus();
   const dialog = root.querySelector<HTMLDialogElement>("[data-timer-dialog]");
   if (dialog && !dialog.open) dialog.showModal();
 }
 
 function render(allowDuringAnimation = false): void {
+  skipLink.href = `#${activeView}`;
   if (mouseDragActive) return;
   if (taskAnimationLocks.size > 0 && !allowDuringAnimation) return;
   cancelListAppend();
@@ -900,22 +974,22 @@ function render(allowDuringAnimation = false): void {
   const visibleTasks = showingToday ? active : completedToday;
   const historyCount = historyDay.completed.length + historyDay.archived.length;
   const headingDate = showingHistory ? parseLocalDate(selectedHistoryDate) : new Date();
-  const headingDateLabel = new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" }).format(headingDate);
+  const headingDateLabel = new Intl.DateTimeFormat(locale(), { weekday: "long", day: "numeric", month: "long" }).format(headingDate);
   const taskList = showingHistory
     ? renderHistoryLists()
     : loading
-    ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем очередь…</span></div>`
+    ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>${t("Загружаем очередь…")}</span></div>`
     : visibleTasks.length
-      ? `<ol class="task-list ${showingToday ? "" : "completed-list"}" aria-label="${showingToday ? "Очередь задач" : "Выполненные сегодня задачи"}">${visibleTasks.slice(0, 32).map((task, index) => renderTask(task, index, !showingToday)).join("")}</ol>`
+      ? `<ol class="task-list ${showingToday ? "" : "completed-list"}" aria-label="${showingToday ? t("Очередь задач") : t("Выполненные сегодня задачи")}">${visibleTasks.slice(0, 32).map((task, index) => renderTask(task, index, !showingToday)).join("")}</ol>`
       : loadFailed
         ? `<div class="empty-state load-error-state">
              <span class="empty-mark" aria-hidden="true">!</span>
-             <strong>${showingToday ? "Очередь недоступна" : "Список недоступен"}</strong>
-             <span>Попробуйте загрузить задачи ещё раз.</span>
-             <button class="retry-button" type="button" data-retry-load>Повторить</button><button class="retry-button" type="button" data-view="settings">Восстановление данных</button>
+             <strong>${showingToday ? t("Очередь недоступна") : t("Список недоступен")}</strong>
+             <span>${t("Попробуйте загрузить задачи ещё раз.")}</span>
+             <button class="retry-button" type="button" data-retry-load>${t("Повторить")}</button><button class="retry-button" type="button" data-view="settings">${t("Восстановление данных")}</button>
            </div>`
         : `<div class="empty-state">
-           <strong>${showingToday ? "Задач пока нет" : "Выполненных задач сегодня нет"}</strong>
+           <strong>${showingToday ? t("Задач пока нет") : t("Выполненных задач сегодня нет")}</strong>
          </div>`;
 
   root.innerHTML = `
@@ -925,23 +999,23 @@ function render(allowDuringAnimation = false): void {
       <main class="main-content ${showingToday ? "is-today-view" : showingHistory ? "is-history-view" : "is-completed-view"}" id="${activeView}">
         <section class="day-heading" aria-labelledby="page-title">
           <div>
-            <p class="eyebrow">${escapeHtml(headingDateLabel)} / ${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(headingDate)}</p>
-            <h1 id="page-title">${showingToday ? 'План на день<span class="heading-period">.</span>' : showingHistory ? 'История<span class="heading-period">.</span>' : 'Выполнено<span class="heading-period">.</span>'}</h1>
+            <p class="eyebrow">${escapeHtml(headingDateLabel)} / ${new Intl.DateTimeFormat(locale(), { day: "2-digit", month: "2-digit", year: "numeric" }).format(headingDate)}</p>
+            <h1 id="page-title">${showingToday ? `${t("План на день")}<span class="heading-period">.</span>` : showingHistory ? `${t("История")}<span class="heading-period">.</span>` : `${t("Выполнено")}<span class="heading-period">.</span>`}</h1>
           </div>
           <div class="day-actions">
-            <div class="day-progress" aria-label="${showingHistory ? "Задач за дату" : showingToday ? "Активных" : "Выполненных сегодня"} задач: ${showingHistory ? historyCount : visibleTasks.length}">
+            <div class="day-progress" aria-label="${showingHistory ? t("Задач за дату") : showingToday ? t("Активных") : t("Выполненных сегодня")} ${t("задач:")} ${showingHistory ? historyCount : visibleTasks.length}">
               <span class="progress-count">${String(showingHistory ? historyCount : visibleTasks.length).padStart(2, "0")}</span>
             </div>
-            <button class="overlay-toggle" type="button" data-toggle-overlay>Оверлей</button>
-            ${overlayShortcutAvailable ? "" : `<button class="overlay-shortcut-warning" type="button" data-open-overlay-shortcut>Настроить клавишу</button>`}
+            <button class="overlay-toggle" type="button" data-toggle-overlay>${t("Оверлей")}</button>
+            ${overlayShortcutAvailable ? "" : `<button class="overlay-shortcut-warning" type="button" data-open-overlay-shortcut>${t("Настроить клавишу")}</button>`}
           </div>
         </section>
 
         ${showingToday ? `<form class="quick-add" id="quick-add-form">
           <input id="new-task-title" name="title" type="text" autocomplete="off"
-            placeholder="Новая задача" aria-label="Название новой задачи" ${saving ? "disabled" : ""} />
+            placeholder="${t("Новая задача")}" aria-label="${t("Название новой задачи")}" ${saving ? "disabled" : ""} />
           <kbd>ENTER <span aria-hidden="true">↵</span></kbd>
-          <button class="add-button" type="submit" aria-label="Добавить задачу" ${saving ? "disabled" : ""}>＋</button>
+          <button class="add-button" type="submit" aria-label="${t("Добавить задачу")}" ${saving ? "disabled" : ""}>＋</button>
         </form>` : ""}
 
         <p class="error-banner" role="alert" ${errorMessage ? "" : "hidden"}>
@@ -951,21 +1025,21 @@ function render(allowDuringAnimation = false): void {
         <section class="queue-section" aria-labelledby="queue-title">
           <div class="section-heading" ${showingHistory ? "hidden" : ""}>
             <div class="section-title-wrap">
-              <h2 id="queue-title">${showingToday ? "Очередь" : showingCompleted ? "Сегодня" : ""}</h2>
+              <h2 id="queue-title">${showingToday ? t("Очередь") : showingCompleted ? t("Сегодня") : ""}</h2>
             </div>
           </div>
-          ${showingHistory ? `<div class="history-list-container">${historyLoading ? '<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>Загружаем список…</span></div>' : taskList}</div>` : taskList}
+          ${showingHistory ? `<div class="history-list-container">${historyLoading ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>${t("Загружаем список…")}</span></div>` : taskList}</div>` : taskList}
         </section>
         ${showingHistory ? renderCalendar() : ""}
         ${reminderEditingTaskId ? (() => {
           const task = tasks.find((item) => item.id === reminderEditingTaskId);
           if (!task) return "";
-          return `<dialog class="reminder-dialog" data-reminder-dialog><form data-reminder-form="${task.id}"><h2>Напоминание</h2><label for="reminder-time">Время сегодня</label><input id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div data-reminder-notification-warning ${notificationStatus !== null && !notificationStatus.canTest ? "" : "hidden"}><p>${escapeHtml(notificationStatus?.message ?? "")}</p><button class="retry-button" type="button" data-open-notification-settings>Настройки Windows</button></div><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">Удалить</button>` : ""}<button type="button" data-close-reminder>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>`;
+          return `<dialog class="reminder-dialog" data-reminder-dialog aria-labelledby="reminder-heading" aria-describedby="reminder-error"><form data-reminder-form="${task.id}"><h2 id="reminder-heading">${t("Напоминание")}</h2><label for="reminder-time">${t("Время сегодня")}</label><input aria-describedby="reminder-error" id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p id="reminder-error" class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div data-reminder-notification-warning ${notificationStatus !== null && !notificationStatus.canTest ? "" : "hidden"}><p>${escapeHtml(backendText(notificationStatus?.message ?? ""))}</p><button class="retry-button" type="button" data-open-notification-settings>${t("Настройки Windows")}</button></div><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">${t("Удалить")}</button>` : ""}<button type="button" data-close-reminder>${t("Отмена")}</button><button type="submit">${t("Сохранить")}</button></div></form></dialog>`;
         })() : ""}
-        ${overlayShortcutDialogOpen ? `<dialog class="reminder-dialog" data-overlay-shortcut-dialog><form data-overlay-shortcut-form><h2>Горячая клавиша</h2><label for="overlay-shortcut-input">Сочетание клавиш</label><input id="overlay-shortcut-input" name="shortcut" type="text" value="${escapeHtml(overlayShortcut)}" placeholder="Ctrl+Shift+O" required aria-describedby="overlay-shortcut-help"/><small id="overlay-shortcut-help">Например: Ctrl+Shift+O</small><p class="reminder-dialog-error" role="alert">${escapeHtml(overlayShortcutError)}</p><div class="reminder-actions"><button type="button" data-close-overlay-shortcut>Отмена</button><button type="submit">Сохранить</button></div></form></dialog>` : ""}
+        ${overlayShortcutDialogOpen ? `<dialog class="reminder-dialog" data-overlay-shortcut-dialog aria-labelledby="overlay-shortcut-heading"><form data-overlay-shortcut-form><h2 id="overlay-shortcut-heading">${t("Горячая клавиша")}</h2><label for="overlay-shortcut-input">${t("Сочетание клавиш")}</label><input id="overlay-shortcut-input" name="shortcut" type="text" value="${escapeHtml(overlayShortcut)}" placeholder="Ctrl+Shift+O" required aria-describedby="overlay-shortcut-help"/><small id="overlay-shortcut-help">${t("Например: Ctrl+Shift+O")}</small><p class="reminder-dialog-error" role="alert">${escapeHtml(overlayShortcutError)}</p><div class="reminder-actions"><button type="button" data-close-overlay-shortcut>${t("Отмена")}</button><button type="submit">${t("Сохранить")}</button></div></form></dialog>` : ""}
 
       </main>
-      <span class="visually-hidden" role="status" aria-live="polite">${escapeHtml(announcement)}</span>
+
     </div>`;
 
   bindEvents();
@@ -1092,15 +1166,15 @@ function bindEvents(scope: ParentNode = root): void {
   }));
   if (scope === root) bindNotificationControls();
   scope.querySelectorAll<HTMLButtonElement>("[data-add-timer]").forEach((button) => button.addEventListener("click", () => { timerError = ""; timerDialogOpen = true; render(true); }));
-  scope.querySelector<HTMLButtonElement>("[data-close-timer]")?.addEventListener("click", () => { timerDialogOpen = false; timerError = ""; render(true); });
+  scope.querySelector<HTMLButtonElement>("[data-close-timer]")?.addEventListener("click", () => { timerDialogOpen = false; timerError = ""; render(true); root.querySelector<HTMLButtonElement>("[data-add-timer]")?.focus({ preventScroll: true }); });
   scope.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) { timerDialogOpen = false; render(true); } });
-  scope.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("cancel", () => { timerDialogOpen = false; });
+  scope.querySelector<HTMLDialogElement>("[data-timer-dialog]")?.addEventListener("cancel", (event) => { event.preventDefault(); timerDialogOpen = false; render(true); root.querySelector<HTMLButtonElement>("[data-add-timer]")?.focus({ preventScroll: true }); });
   scope.querySelector<HTMLFormElement>("[data-timer-form]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const name = String(new FormData(form).get("name") ?? "").trim();
     const durationSeconds = timerSecondsFromForm(form);
-    if (!name || !durationSeconds || durationSeconds > 359_999) { timerError = "Укажите название и длительность от 1 секунды до 99 часов 59 минут 59 секунд."; render(true); return; }
+    if (!name || !durationSeconds || durationSeconds > 359_999) { timerError = t("Укажите название и длительность от 1 секунды до 99 часов 59 минут 59 секунд."); render(true); return; }
     try {
       await invoke<Timer>("create_timer", { name, durationSeconds });
       timerDialogOpen = false;
@@ -1112,12 +1186,12 @@ function bindEvents(scope: ParentNode = root): void {
     if (!id || !action) return;
     try {
       if (action === "delete") await invoke("delete_timer", { id });
-      else if (action === "pause") await invoke("pause_timer", { id });
-      else if (action === "reset") await invoke("reset_timer", { id });
+      else if (action === "pause") { await invoke("pause_timer", { id }); announce(t("Таймер приостановлен")); }
+      else if (action === "reset") { await invoke("reset_timer", { id }); announce(t("Таймер сброшен")); }
       else {
         const timer = timers.find((item) => item.id === id);
         if (timer?.status === "finished") await invoke("reset_timer", { id });
-        await invoke("start_timer", { id });
+        await invoke("start_timer", { id }); announce(t("Таймер запущен"));
       }
       await refreshTimers();
     } catch (error) { timerError = backendMessage(error); render(true); }
@@ -1244,7 +1318,7 @@ function bindEvents(scope: ParentNode = root): void {
     const input = root.querySelector<HTMLInputElement>("#new-task-title");
     const title = input?.value.trim() ?? "";
     if (!title) {
-      errorMessage = "Введите название задачи.";
+      errorMessage = t("Введите название задачи.");
       render();
       root.querySelector<HTMLInputElement>("#new-task-title")?.focus();
       return;
@@ -1283,7 +1357,7 @@ function bindEvents(scope: ParentNode = root): void {
       const input = form.querySelector<HTMLInputElement>("[name=title]");
       const title = input?.value.trim() ?? "";
       if (!taskId || !title) {
-        errorMessage = "Введите название задачи.";
+        errorMessage = t("Введите название задачи.");
         render();
         return;
       }
@@ -1320,7 +1394,7 @@ function bindEvents(scope: ParentNode = root): void {
           item.style.order = String(index);
           const number = item.querySelector<HTMLElement>(".position-current");
           if (number) number.textContent = String(index + 1).padStart(2, "0");
-          item.querySelector("[data-position]")?.setAttribute("aria-label", `Задача ${index + 1}`);
+          item.querySelector("[data-position]")?.setAttribute("aria-label", `${t("Задача")} ${index + 1}`);
         });
         if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) for (const item of original) {
           if (item === row) continue;
@@ -1404,7 +1478,7 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
   if (!saved) return;
   const index = activeTasks().findIndex((task) => task.id === movedId);
   if (index >= 0) {
-    announcement = `Задача перемещена на позицию ${index + 1} из ${activeTasks().length}.`;
+    announce(`${t("Задача перемещена на позицию")} ${index + 1} ${t("из")} ${activeTasks().length}.`);
   }
   render();
   if (index >= 0) focusTaskWhenRendered(movedId);
@@ -1522,8 +1596,10 @@ function bindOverlayTimerDrag(card: HTMLElement, pinned: boolean, reorder: (ids:
 
 async function renderOverlay(): Promise<void> {
   const overlayRoot = root;
+  overlayRoot.setAttribute("role", "main"); skipLink.hidden = true;
   let overlayError = "";
   let lastRenderKey = "";
+  let lastLanguage = language();
   let previousRunningIds = new Set<string>();
   const visibleTimerIds = new Set<string>();
   const hiddenTimerIds = new Set<string>();
@@ -1566,7 +1642,7 @@ async function renderOverlay(): Promise<void> {
       }
       const pinned = await invoke<boolean>("get_overlay_pinned");
       const task = active[0];
-      const renderKey = JSON.stringify([task?.id, task?.title, task?.position, pinned, overlayError, displayTimers.map((timer) => [timer.id, timer.status, endingTimers.has(timer.id)])]);
+      const renderKey = JSON.stringify([language(), displaySettings.highContrast, task?.id, task?.title, task?.position, pinned, overlayError, displayTimers.map((timer) => [timer.id, timer.status, endingTimers.has(timer.id)])]);
       if (renderKey === lastRenderKey) {
         for (const timer of displayTimers) {
           const card = overlayRoot.querySelector<HTMLElement>(`[data-timer-card="${CSS.escape(timer.id)}"]`);
@@ -1591,16 +1667,17 @@ async function renderOverlay(): Promise<void> {
       shownTaskId = task?.id ?? null;
       const retainedCards = new Map([...overlayRoot.querySelectorAll<HTMLElement>("[data-timer-card]")].map((card) => [card.dataset.timerCard!, card]));
       lastRenderKey = renderKey;
+      const restoreFocus = preserveTimerFocus(overlayRoot);
       const staged = document.createElement("div");
-      staged.innerHTML = `<section class="overlay-card" aria-label="Следующая задача">
-        <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>СЛЕДУЮЩАЯ ЗАДАЧА</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? "Снять закрепление и разрешить перемещение" : "Закрепить положение поверх окон"}" title="${pinned ? "Открепить" : "Закрепить положение и поверх окон"}">${pinned ? "◆" : "◇"}</button></header>
+      staged.innerHTML = `<section class="overlay-card" aria-label="${t("Следующая задача")}">
+        <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>${t("СЛЕДУЮЩАЯ ЗАДАЧА")}</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? t("Снять закрепление и разрешить перемещение") : t("Закрепить положение поверх окон")}" title="${pinned ? t("Открепить") : t("Закрепить положение и поверх окон")}">${pinned ? "◆" : "◇"}</button></header>
         ${task ? `<div class="overlay-task"><strong>${escapeHtml(task.title)}</strong></div>
-          <footer class="overlay-actions"><button type="button" data-overlay-complete="${task.id}">Выполнено</button><button type="button" data-overlay-open>Открыть список</button></footer>`
-          : `<div class="overlay-empty"><strong>На сегодня всё</strong><button type="button" data-overlay-open>Добавить задачу</button></div>`}
-        ${overlayError ? `<p class="overlay-error" role="alert">${escapeHtml(overlayError)} <button type="button" data-overlay-retry>Повторить</button></p>` : ""}
+          <footer class="overlay-actions"><button type="button" data-overlay-complete="${task.id}">${t("Выполнено")}</button><button type="button" data-overlay-open>${t("Открыть список")}</button></footer>`
+          : `<div class="overlay-empty"><strong>${t("На сегодня всё")}</strong><button type="button" data-overlay-open>${t("Добавить задачу")}</button></div>`}
+        ${overlayError ? `<p class="overlay-error" role="alert">${escapeHtml(overlayError)} <button type="button" data-overlay-retry>${t("Повторить")}</button></p>` : ""}
       </section>`;
       if (displayTimers.length) {
-        staged.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="Запущенные таймеры"><div class="overlay-timer-grid">${displayTimers.map((timer) => timerCard(timer, false, true).replace('class="timer-card ', `class="timer-card ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""} `)).join("")}</div></section>`);
+        staged.insertAdjacentHTML("beforeend", `<section class="overlay-timer-area" aria-label="${t("Запущенные таймеры")}"><div class="overlay-timer-grid">${displayTimers.map((timer) => timerCard(timer, false, true).replace('class="timer-card ', `class="timer-card ${enteringTimerIds.has(timer.id) ? "is-entering" : ""} ${endingTimers.has(timer.id) ? "is-evaporating" : ""} `)).join("")}</div></section>`);
       }
       const nextHeader = staged.querySelector<HTMLElement>(".overlay-card")!;
       const currentHeader = overlayRoot.querySelector<HTMLElement>(".overlay-card");
@@ -1610,7 +1687,7 @@ async function renderOverlay(): Promise<void> {
       if (!grid && displayTimers.length) {
         const area = document.createElement("section");
         area.className = "overlay-timer-area";
-        area.setAttribute("aria-label", "Запущенные таймеры");
+        area.setAttribute("aria-label", t("Запущенные таймеры"));
         grid = document.createElement("div");
         grid.className = "overlay-timer-grid";
         area.append(grid);
@@ -1621,7 +1698,9 @@ async function renderOverlay(): Promise<void> {
       for (const next of staged.querySelectorAll<HTMLElement>("[data-timer-card]")) {
         const id = next.dataset.timerCard!;
         const old = retainedCards.get(id);
-        if (old) {
+        if (old && lastLanguage !== language()) {
+          old.replaceWith(next);
+        } else if (old) {
           old.classList.toggle("is-evaporating", endingTimers.has(id));
           if (!enteringTimerIds.has(id)) old.classList.remove("is-entering");
           if (old.dataset.timerStatus !== next.dataset.timerStatus) {
@@ -1653,6 +1732,8 @@ async function renderOverlay(): Promise<void> {
         void load();
         window.setTimeout(() => { visibleTimerIds.delete(id); endingTimers.delete(id); void load(); }, 900);
       }; });
+      lastLanguage = language();
+      restoreFocus();
       overlayRoot.querySelector<HTMLElement>(".overlay-header")?.addEventListener("pointerdown", (event) => {
         if (pinned || (event.target as HTMLElement).closest("button")) return;
         void getCurrentWindow().startDragging().catch((error: unknown) => { overlayError = backendMessage(error); });
@@ -1663,12 +1744,12 @@ async function renderOverlay(): Promise<void> {
         if (!id || !action) return;
         try {
           if (action === "delete") await invoke("delete_timer", { id });
-          else if (action === "pause") await invoke("pause_timer", { id });
-          else if (action === "reset") await invoke("reset_timer", { id });
+          else if (action === "pause") { await invoke("pause_timer", { id }); announce(t("Таймер приостановлен")); }
+          else if (action === "reset") { await invoke("reset_timer", { id }); announce(t("Таймер сброшен")); }
           else {
             const timer = displayTimers.find((item) => item.id === id);
             if (timer?.status === "finished") await invoke("reset_timer", { id });
-            await invoke("start_timer", { id });
+            await invoke("start_timer", { id }); announce(t("Таймер запущен"));
           }
           overlayError = "";
           await load();
@@ -1692,14 +1773,14 @@ async function renderOverlay(): Promise<void> {
       overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-retry]")?.addEventListener("click", () => { overlayError = ""; void load(); });
     } catch (error) {
       overlayError = backendMessage(error);
-      overlayRoot.innerHTML = `<section class="overlay-card overlay-failed"><strong>Очередь недоступна</strong><p role="alert">${escapeHtml(overlayError)}</p><button type="button" data-overlay-retry>Повторить</button></section>`;
+      overlayRoot.innerHTML = `<section class="overlay-card overlay-failed"><strong>${t("Очередь недоступна")}</strong><p role="alert">${escapeHtml(overlayError)}</p><button type="button" data-overlay-retry>${t("Повторить")}</button></section>`;
       overlayRoot.querySelector<HTMLButtonElement>("[data-overlay-retry]")?.addEventListener("click", () => { overlayError = ""; void load(); });
     }
     finally { loadingOverlay = false; }
   };
   await load();
   void listen("tasks-changed", () => { void load(); });
-  void listen("overlay-settings-error", () => { overlayError = "Не удалось сохранить положение оверлея."; void load(); });
+  void listen("overlay-settings-error", () => { overlayError = t("Не удалось сохранить положение оверлея."); void load(); });
   window.setInterval(() => { void load(); }, 500);
 }
 
@@ -1709,6 +1790,7 @@ async function loadShortcuts(): Promise<void> {
   if (getCurrentWindow().label !== "overlay" && activeView === "settings") render(true);
 }
 void listen<ClearMode>("data-cleared", ({ payload }) => {
+  announce(t("Данные очищены"));
   tasks = []; deletionUndos = []; editingTaskId = null; reminderEditingTaskId = null;
   highlightedReminderTaskId = null; pendingTaskFocusId = null;
   enteringTaskIds.clear(); taskAnimationLocks.clear();
@@ -1763,13 +1845,13 @@ void listen<string>("reminder-open-task", async ({ payload }) => {
   window.setTimeout(() => { highlightedReminderTaskId = null; render(true); }, 4_000);
 });
 void listen<string | null>("reminder-delivery-error", ({ payload }) => {
-  errorMessage = typeof payload === "string" ? payload : "Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления.";
+  errorMessage = typeof payload === "string" ? backendText(payload) : t("Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления.");
   notificationActionMessage = errorMessage;
   if (activeView === "settings") updateNotificationControls(); else render(true);
   void refreshNotificationStatus();
 });
 void listen("reminder-runtime-error", () => {
-  errorMessage = "Не удалось обработать напоминание. Перезапустите приложение.";
+  errorMessage = t("Не удалось обработать напоминание. Перезапустите приложение.");
   render(true);
 });
 void refreshAutostart();
@@ -1825,21 +1907,21 @@ window.addEventListener("keydown", (event) => {
   }
 });
 void listen<Timer>("timer-finished", async ({ payload }) => {
-  announcement = `Таймер завершён: ${payload.name}.`;
+  announce(`${t("Таймер завершён:")} ${payload.name}.`);
   await refreshTimers();
 });
 void listen<string | null>("timer-notification-error", ({ payload }) => {
-  timerError = typeof payload === "string" ? payload : "Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления.";
+  timerError = typeof payload === "string" ? backendText(payload) : t("Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления.");
   notificationActionMessage = timerError;
   if (activeView === "timers") render(true); else if (activeView === "settings") updateNotificationControls();
   void refreshNotificationStatus();
 });
 void listen("timer-runtime-error", () => {
-  timerError = "Не удалось сохранить состояние таймера.";
+  timerError = t("Не удалось сохранить состояние таймера.");
   if (activeView === "timers") render(true);
 });
 void listen("archive-runtime-error", () => {
-  errorMessage = "Не удалось проверить срок задач. Перезапустите приложение.";
+  errorMessage = t("Не удалось проверить срок задач. Перезапустите приложение.");
   render();
 });
 window.setInterval(() => { if (activeView === "timers") void refreshTimers(false); }, 1_000);
@@ -1858,13 +1940,13 @@ void listen<string>("overlay-open-timer-focus", ({ payload }) => {
 });
 void listen<string>("overlay-shortcut-error", ({ payload }) => {
   overlayShortcutAvailable = false;
-  errorMessage = `${payload} Проверьте, не занято ли сочетание другой программой.`;
+  errorMessage = `${backendText(payload)} ${t("Проверьте, не занято ли сочетание другой программой.")}`;
   render(true);
 });
 void invoke<OverlayShortcutStatus>("get_overlay_shortcut_status").then((status) => {
   overlayShortcut = status.shortcut;
   overlayShortcutAvailable = status.available;
-  if (!status.available) errorMessage = `Не удалось зарегистрировать ${status.shortcut}. Можно выбрать другое сочетание клавиш.`;
+  if (!status.available) errorMessage = `${t("Не удалось зарегистрировать")} ${status.shortcut}. ${t("Можно выбрать другое сочетание клавиш.")}`;
   render(true);
 }).catch((error) => {
   errorMessage = backendMessage(error);

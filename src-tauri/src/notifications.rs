@@ -132,7 +132,9 @@ pub async fn send_test_notification(app: tauri::AppHandle) -> Result<(), crate::
         app.notification()
             .builder()
             .title("taskMaster")
-            .body("Проверка уведомлений taskMaster.")
+            .body(crate::presentation::text(
+                "Проверка уведомлений taskMaster.",
+            ))
             .show()
             .map_err(|_| delivery_error())
     })
