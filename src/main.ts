@@ -506,6 +506,7 @@ function renderTimers(): void {
 }
 
 function render(allowDuringAnimation = false): void {
+  if (mouseDragActive) return;
   if (taskAnimationLocks.size > 0 && !allowDuringAnimation) return;
   if (activeView === "timers") { renderTimers(); return; }
   if (timerAnimationFrame !== null) {
@@ -905,88 +906,98 @@ function bindEvents(): void {
   });
 
   root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
-    row.addEventListener("mousedown", (event) => {
-      if (saving || taskAnimationLocks.has(row.dataset.taskId ?? "")) return;
-      if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button, input, a"))) return;
-      const sourceId = row.dataset.taskId;
-      if (!sourceId) return;
-      const startX = event.clientX;
-      const startY = event.clientY;
-      const rowBounds = row.getBoundingClientRect();
-      const pointerOffsetX = event.clientX - rowBounds.left;
-      const pointerOffsetY = event.clientY - rowBounds.top;
-      let dragPreview: HTMLLIElement | null = null;
-      mouseDragActive = false;
-
-      const handleMouseMove = (moveEvent: MouseEvent): void => {
-        if (!mouseDragActive && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) return;
+    row.addEventListener("pointerdown", (event) => {
+      if (saving || mouseDragActive || taskAnimationLocks.size || event.button !== 0 || (event.target as HTMLElement).closest("button, input, a")) return;
+      const list = row.closest<HTMLOListElement>(".task-list")!;
+      const original = [...list.querySelectorAll<HTMLLIElement>(".task-row")];
+      const originalIds = original.map((item) => item.dataset.taskId!);
+      let ordered = [...original];
+      let preview: HTMLElement | null = null;
+      let x = event.clientX, y = event.clientY;
+      let frame = 0;
+      const bounds = row.getBoundingClientRect();
+      const offsetX = x - bounds.left, offsetY = y - bounds.top;
+      const animations = new Map<HTMLElement, Animation>();
+      const arrange = (): void => {
+        const before = new Map(original.map((item) => [item, item.getBoundingClientRect()]));
+        for (const animation of animations.values()) animation.cancel();
+        ordered.forEach((item, index) => {
+          item.style.order = String(index);
+          const number = item.querySelector<HTMLElement>(".position-current");
+          if (number) number.textContent = String(index + 1).padStart(2, "0");
+          item.querySelector("[data-position]")?.setAttribute("aria-label", `Задача ${index + 1}`);
+        });
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) for (const item of original) {
+          if (item === row) continue;
+          const previous = before.get(item)!;
+          const next = item.getBoundingClientRect();
+          animations.set(item, item.animate([{ transform: `translateY(${previous.top - next.top}px)` }, { transform: "translateY(0)" }], { duration: 200, easing: "ease-out" }));
+        }
+      };
+      original.forEach((item, index) => { item.style.order = String(index); });
+      const tick = (): void => {
+        if (!preview) return;
+        preview.style.left = `${Math.max(0, Math.min(window.innerWidth - bounds.width, x - offsetX))}px`;
+        preview.style.top = `${Math.max(0, Math.min(window.innerHeight - bounds.height, y - offsetY))}px`;
+        const listBounds = list.getBoundingClientRect();
+        if (y > listBounds.bottom - 40) list.scrollTop += 10;
+        else if (y < listBounds.top + 40) list.scrollTop -= 10;
+        let targetIndex = ordered.indexOf(row), distance = Infinity;
+        for (const [index, item] of ordered.entries()) {
+          const d = Math.abs(y - (listBounds.top + item.offsetTop - list.scrollTop + item.offsetHeight / 2));
+          if (d < distance) { distance = d; targetIndex = index; }
+        }
+        if (targetIndex !== ordered.indexOf(row)) {
+          ordered.splice(ordered.indexOf(row), 1);
+          ordered.splice(targetIndex, 0, row);
+          arrange();
+          const number = preview.querySelector<HTMLElement>(".position-current");
+          if (number) number.textContent = String(targetIndex + 1).padStart(2, "0");
+        }
+        frame = requestAnimationFrame(tick);
+      };
+      const hold = window.setTimeout(() => {
         mouseDragActive = true;
-        moveEvent.preventDefault();
         window.getSelection()?.removeAllRanges();
         document.body.classList.add("is-task-dragging");
+        row.setPointerCapture(event.pointerId);
+        preview = row.cloneNode(true) as HTMLElement;
+        preview.classList.add("task-drag-preview");
+        preview.removeAttribute("data-task-id");
+        preview.setAttribute("aria-hidden", "true");
+        preview.style.width = `${bounds.width}px`;
+        preview.style.height = `${bounds.height}px`;
+        document.body.append(preview);
         row.classList.add("is-drag-source");
-        if (!dragPreview) {
-          dragPreview = row.cloneNode(true) as HTMLLIElement;
-          dragPreview.classList.remove("is-drag-source", "drop-target", "drop-before", "drop-after");
-          dragPreview.classList.add("task-drag-preview");
-          dragPreview.dataset.reorderable = "false";
-          dragPreview.removeAttribute("data-task-id");
-          dragPreview.removeAttribute("tabindex");
-          dragPreview.removeAttribute("aria-label");
-          dragPreview.setAttribute("aria-hidden", "true");
-          dragPreview.querySelector<HTMLButtonElement>(".task-check")?.removeAttribute("disabled");
-          const bounds = row.getBoundingClientRect();
-          dragPreview.style.width = `${bounds.width}px`;
-          document.body.append(dragPreview);
-        }
-        dragPreview.style.left = `${Math.min(Math.max(8, moveEvent.clientX - pointerOffsetX), Math.max(8, window.innerWidth - dragPreview.offsetWidth - 8))}px`;
-        dragPreview.style.top = `${Math.min(Math.max(8, moveEvent.clientY - pointerOffsetY), Math.max(8, window.innerHeight - dragPreview.offsetHeight - 8))}px`;
-        const list = row.closest<HTMLOListElement>(".task-list");
-        if (list) {
-          const bounds = list.getBoundingClientRect();
-          const edge = Math.min(48, bounds.height * 0.2);
-          if (moveEvent.clientY > bounds.bottom - edge) list.scrollTop += 12;
-          else if (moveEvent.clientY < bounds.top + edge) list.scrollTop -= 12;
-        }
-        const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
-        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target", "drop-before", "drop-after"));
-        if (target && target.dataset.taskId !== sourceId) {
-          target.classList.add("drop-target", moveEvent.clientY < target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2 ? "drop-before" : "drop-after");
-        }
-      };
-
-      const handleMouseUp = (upEvent: MouseEvent): void => {
-        window.removeEventListener("mousemove", handleMouseMove);
-        window.removeEventListener("mouseup", handleMouseUp);
-        const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY)?.closest<HTMLLIElement>(".task-row[data-reorderable=true]") ?? null;
-        const targetId = target?.dataset.taskId;
-        const shouldSave = mouseDragActive && targetId && targetId !== sourceId;
-        row.classList.remove("is-drag-source");
-        dragPreview?.remove();
-        root.querySelectorAll(".task-row").forEach((item) => item.classList.remove("drop-target", "drop-before", "drop-after"));
+        tick();
+      }, 180);
+      const finish = (cancelled = false): void => {
+        clearTimeout(hold); cancelAnimationFrame(frame);
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", cancel);
+        window.removeEventListener("blur", cancel);
+        window.removeEventListener("keydown", escape);
+        if (row.hasPointerCapture(event.pointerId)) row.releasePointerCapture(event.pointerId);
+        preview?.remove(); row.classList.remove("is-drag-source");
         document.body.classList.remove("is-task-dragging");
+        const didDrag = mouseDragActive;
         mouseDragActive = false;
-        if (!shouldSave || !target) return;
-
-        const originalIds = activeTasks().map((task) => task.id);
-        const ids = [...originalIds];
-        const sourceIndex = ids.indexOf(sourceId);
-        const targetIndex = ids.indexOf(targetId);
-        if (sourceIndex < 0 || targetIndex < 0) return;
-        const afterTarget = upEvent.clientY >= target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
-        ids.splice(sourceIndex, 1);
-        let destinationIndex = targetIndex - (sourceIndex < targetIndex ? 1 : 0) + (afterTarget ? 1 : 0);
-        destinationIndex = Math.max(0, Math.min(destinationIndex, ids.length));
-        ids.splice(destinationIndex, 0, sourceId);
-        if (ids.some((id, index) => id !== originalIds[index])) void saveOrder(ids, destinationIndex);
+        const ids = ordered.map((item) => item.dataset.taskId!);
+        if (!cancelled && didDrag && ids.some((id, index) => id !== originalIds[index])) void saveOrder(ids, ids.indexOf(row.dataset.taskId!));
+        else { ordered = [...original]; arrange(); }
       };
-
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
+      const move = (e: PointerEvent): void => { x = e.clientX; y = e.clientY; if (preview) { e.preventDefault(); window.getSelection()?.removeAllRanges(); } };
+      const up = (): void => finish();
+      const cancel = (): void => finish(true);
+      const escape = (e: KeyboardEvent): void => { if (e.key === "Escape") finish(true); };
+      window.addEventListener("pointermove", move, { passive: false });
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", cancel);
+      window.addEventListener("blur", cancel);
+      window.addEventListener("keydown", escape);
     });
-  });
 
-  root.querySelectorAll<HTMLLIElement>(".task-row[data-reorderable=true]").forEach((row) => {
     row.addEventListener("keydown", (event) => {
       if (saving || taskAnimationLocks.has(row.dataset.taskId ?? "")) return;
       if (event.key === "F2") {
@@ -1019,11 +1030,12 @@ async function saveOrder(ids: string[], movedIndex: number): Promise<void> {
   render();
 }
 
-function bindOverlayTimerDrag(card: HTMLElement, reorder: (ids: string[]) => void, setDragging: (value: boolean) => void): void {
+function bindOverlayTimerDrag(card: HTMLElement, pinned: boolean, reorder: (ids: string[]) => void, setDragging: (value: boolean) => void): void {
+  card.classList.toggle("is-reorder-locked", pinned);
   card.tabIndex = 0;
   card.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
   card.onkeydown = (event) => {
-    if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    if (pinned || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
     event.preventDefault();
     const grid = card.parentElement!;
     const cards = [...grid.querySelectorAll<HTMLElement>("[data-timer-card]")].sort((a, b) => Number(a.style.order) - Number(b.style.order));
@@ -1035,7 +1047,7 @@ function bindOverlayTimerDrag(card: HTMLElement, reorder: (ids: string[]) => voi
     reorder(cards.map((item) => item.dataset.timerCard!));
   };
   card.onpointerdown = (event) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("button") || card.classList.contains("is-evaporating")) return;
+    if (pinned || event.button !== 0 || (event.target as HTMLElement).closest("button") || card.classList.contains("is-evaporating")) return;
     const grid = card.parentElement!;
     const area = grid.parentElement!;
     const cards = [...grid.querySelectorAll<HTMLElement>("[data-timer-card]")].sort((a, b) => Number(a.style.order) - Number(b.style.order));
@@ -1083,6 +1095,7 @@ function bindOverlayTimerDrag(card: HTMLElement, reorder: (ids: string[]) => voi
       frame = requestAnimationFrame(tick);
     };
     const hold = window.setTimeout(() => {
+      window.getSelection()?.removeAllRanges();
       setDragging(true);
       card.setPointerCapture(event.pointerId);
       preview = card.cloneNode(true) as HTMLElement;
@@ -1240,7 +1253,7 @@ async function renderOverlay(): Promise<void> {
         const card = overlayRoot.querySelector<HTMLElement>(`[data-timer-card="${CSS.escape(timer.id)}"]`);
         if (!card) return;
         card.style.order = String(index);
-        bindOverlayTimerDrag(card, (ids) => {
+        bindOverlayTimerDrag(card, pinned, (ids) => {
           const remaining = [...visibleTimerIds].filter((id) => !ids.includes(id));
           visibleTimerIds.clear();
           [...ids, ...remaining].forEach((id) => visibleTimerIds.add(id));

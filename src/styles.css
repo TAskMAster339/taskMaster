@@ -365,3 +365,9 @@ body.is-task-dragging { user-select: none; cursor: grabbing; }
 .overlay-mode .timer-card-overlay.is-timer-drag-source { opacity: .22; outline: 2px dashed var(--obi); outline-offset: -3px; }
 body .overlay-timer-drag-preview { position: fixed; z-index: 10000; width: 360px; height: 360px; min-height: 360px; margin: 0; opacity: .9; pointer-events: none; border-color: var(--obi); background-color: var(--surface); background-image: var(--page-texture); background-size: 600px 600px; background-blend-mode: var(--page-blend); }
 .is-overlay-timer-dragging, .is-overlay-timer-dragging * { cursor: grabbing !important; user-select: none; }
+
+.task-list { position: relative; }
+.task-row[data-reorderable="true"], .overlay-mode .timer-card-overlay { user-select: none; -webkit-user-select: none; }
+.task-row .rename-input { user-select: text; -webkit-user-select: text; }
+body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !important; -webkit-user-select: none !important; }
+.overlay-mode .timer-card-overlay.is-reorder-locked { cursor: default; }

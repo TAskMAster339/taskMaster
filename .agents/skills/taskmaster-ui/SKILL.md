@@ -15,6 +15,7 @@ Use this workflow for frontend changes in this repository.
 4. Provide clear empty, loading, saving/error, notification-permission, completed, archived, and timer states wherever they apply. Never imply a change was saved when the backend rejected it.
 5. Support light, dark, and system themes, keyboard operation, visible focus, accessible names, and a keyboard alternative to drag-and-drop reordering.
 6. Keep responsive behavior usable at the minimum width in `ТЗ.md`; check long task names, high DPI, completed lists, and overlay edge placement.
+6a. Reordering uses the shared project interaction: hold the left mouse button for 180 ms on a non-interactive area, show a pointer-offset preview, move neighboring items dynamically with reduced-motion-aware animation, update task numbers immediately, suppress text selection, and support Escape cancellation and keyboard reorder. Locked overlays disallow timer reorder. Commit task order only on drop and preserve the backend order on failure.
 7. Reuse the current project styling and components when present. Do not add a UI framework or design dependency without a concrete need.
 
 For native notification, window, tray, or persistence behavior, also use `$taskmaster-tauri-rust`.
