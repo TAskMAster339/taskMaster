@@ -442,16 +442,22 @@ fn clamp_to_monitor(
     )
 }
 
-fn overlay_timer_window_size(timer_count: usize, max_width: f64) -> (f64, f64) {
+fn overlay_timer_rows(height: f64) -> usize {
+    ((height - 162.0) / 372.0).floor().max(1.0) as usize
+}
+
+fn overlay_timer_window_size(
+    timer_count: usize,
+    max_width: f64,
+    available_height: f64,
+) -> (f64, f64) {
     if timer_count == 0 {
         return (360.0, 154.0);
     }
-    let columns = timer_count.div_ceil(2);
-    let side = 336.0_f64.min((max_width - 24.0).max(280.0));
-    let width =
-        (360.0 + columns.saturating_sub(1) as f64 * (side + 12.0)).min(max_width.max(360.0));
-    let rows = timer_count.min(2);
-    let height = 154.0 + 20.0 + rows as f64 * side + rows.saturating_sub(1) as f64 * 12.0;
+    let rows = timer_count.min(overlay_timer_rows(available_height));
+    let columns = timer_count.div_ceil(rows.max(1));
+    let width = (360.0 + columns.saturating_sub(1) as f64 * 372.0).min(max_width.max(360.0));
+    let height = 174.0 + rows as f64 * 360.0 + rows.saturating_sub(1) as f64 * 12.0;
     (width, height)
 }
 
@@ -630,9 +636,9 @@ fn open_overlay_timer_focus(id: String, app: AppHandle) {
 }
 
 #[tauri::command]
-fn resize_overlay_for_timers(timer_count: usize, app: AppHandle) -> Result<(), AppError> {
+fn resize_overlay_for_timers(timer_count: usize, app: AppHandle) -> Result<usize, AppError> {
     let Some(window) = app.get_webview_window("overlay") else {
-        return Ok(());
+        return Ok(1);
     };
     let max_width = window
         .current_monitor()
@@ -648,10 +654,17 @@ fn resize_overlay_for_timers(timer_count: usize, app: AppHandle) -> Result<(), A
             )
         })
         .unwrap_or(960.0);
-    let (width, height) = overlay_timer_window_size(timer_count, max_width);
+    let available_height = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().height as f64 / m.scale_factor() - 48.0)
+        .unwrap_or(1000.0);
+    let (width, height) = overlay_timer_window_size(timer_count, max_width, available_height);
     window
         .set_size(LogicalSize::new(width, height))
-        .map_err(|_| AppError::storage())
+        .map_err(|_| AppError::storage())?;
+    Ok(overlay_timer_rows(available_height))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

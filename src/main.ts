@@ -1024,6 +1024,7 @@ async function renderOverlay(): Promise<void> {
   let overlayError = "";
   let lastRenderKey = "";
   let previousRunningIds = new Set<string>();
+  const visibleTimerIds = new Set<string>();
   let lastTimerCount = -1;
   const enteringTimerIds = new Set<string>();
   const endingTimers = new Map<string, Timer>();
@@ -1031,7 +1032,9 @@ async function renderOverlay(): Promise<void> {
     try {
       const active = (await invoke<Task[]>("list_tasks")).filter((task) => task.status === "active").sort((a, b) => a.position - b.position);
       const allTimers = await invoke<Timer[]>("list_timers");
-      const runningTimers = allTimers.filter((timer) => timer.status === "running");
+      theme = readTheme(); applyTheme();
+      for (const timer of allTimers) if (timer.status === "running") visibleTimerIds.add(timer.id);
+      const runningTimers = allTimers.filter((timer) => visibleTimerIds.has(timer.id) && timer.status !== "finished");
       const runningIds = new Set(runningTimers.map((timer) => timer.id));
       for (const timer of runningTimers) {
         if (!previousRunningIds.has(timer.id)) {
@@ -1044,7 +1047,7 @@ async function renderOverlay(): Promise<void> {
           const finished = allTimers.find((timer) => timer.id === id && timer.status === "finished");
           if (finished) {
             endingTimers.set(id, finished);
-            window.setTimeout(() => { endingTimers.delete(id); void load(); }, 900);
+            window.setTimeout(() => { endingTimers.delete(id); visibleTimerIds.delete(id); void load(); }, 900);
           }
         }
       }
@@ -1052,7 +1055,7 @@ async function renderOverlay(): Promise<void> {
       const displayTimers = [...runningTimers, ...endingTimers.values()];
       if (displayTimers.length !== lastTimerCount) {
         lastTimerCount = displayTimers.length;
-        void invoke("resize_overlay_for_timers", { timerCount: displayTimers.length });
+        void invoke<number>("resize_overlay_for_timers", { timerCount: displayTimers.length }).then((rows) => { document.documentElement.style.setProperty("--overlay-rows", String(rows)); });
       }
       const pinned = await invoke<boolean>("get_overlay_pinned");
       const task = active[0];
