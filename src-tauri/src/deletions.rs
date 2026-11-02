@@ -13,6 +13,44 @@ pub struct UndoDeletion {
     pub expires_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeSummary {
+    pub task: Task,
+    pub event_count: i64,
+    pub session_count: i64,
+}
+
+fn purge_summary(connection: &Connection, id: &str) -> Result<PurgeSummary, AppError> {
+    let task = task_by_id(connection, id)?;
+    let eligible: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_events WHERE task_id=?1 AND kind IN ('completed','archived'))",
+        [id], |row| row.get(0),
+    ).map_err(|_| AppError::storage())?;
+    if !eligible {
+        return Err(AppError::invalid_state());
+    }
+    let event_count = connection
+        .query_row(
+            "SELECT COUNT(*) FROM task_events WHERE task_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| AppError::storage())?;
+    let session_count = connection
+        .query_row(
+            "SELECT COUNT(*) FROM focus_sessions WHERE task_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| AppError::storage())?;
+    Ok(PurgeSummary {
+        task,
+        event_count,
+        session_count,
+    })
+}
+
 fn expired_undo() -> AppError {
     AppError {
         code: "undo_expired",
@@ -42,6 +80,32 @@ fn reminder_name(state: Option<ReminderState>) -> Option<&'static str> {
 }
 
 impl TaskStore {
+    pub fn prepare_permanent_deletion(&self, id: &str) -> Result<PurgeSummary, AppError> {
+        purge_summary(&self.connection, id)
+    }
+
+    pub fn permanently_delete_task(&self, expected: &PurgeSummary) -> Result<(), AppError> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|_| AppError::storage())?;
+        if purge_summary(&tx, &expected.task.id)? != *expected {
+            return Err(AppError {
+                code: "task_changed",
+                message: "Задача изменилась. Откройте подтверждение удаления заново.".into(),
+            });
+        }
+        for table in ["focus_sessions", "task_events", "deletion_undos", "tasks"] {
+            let column = if table == "tasks" { "id" } else { "task_id" };
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE {column}=?1"),
+                [&expected.task.id],
+            )
+            .map_err(|_| AppError::storage())?;
+        }
+        compact_active_positions(&tx)?;
+        tx.commit().map_err(|_| AppError::storage())
+    }
     pub fn delete_task_at(&self, id: &str, now: i64) -> Result<UndoDeletion, AppError> {
         let tx = self
             .connection
@@ -218,6 +282,84 @@ impl TaskStore {
 mod tests {
     use super::*;
     use crate::tasks::TaskStatus;
+    #[test]
+    fn permanent_deletion_removes_only_the_confirmed_task_and_its_history() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Удалить").unwrap();
+        let other = store.create_task("Оставить").unwrap();
+        store.delete_task_at(&task.id, task.created_at).unwrap();
+        store.connection.execute("INSERT INTO focus_sessions(id,task_id,duration_seconds,started_at,running_since,status) VALUES('legacy',?1,60,0,0,'finished')", [&task.id]).unwrap();
+        let summary = store.prepare_permanent_deletion(&task.id).unwrap();
+        assert_eq!(summary.session_count, 1);
+        store.permanently_delete_task(&summary).unwrap();
+        assert_eq!(
+            store.list_tasks().unwrap(),
+            vec![task_by_id(&store.connection, &other.id).unwrap()]
+        );
+        for table in ["task_events", "focus_sessions", "deletion_undos"] {
+            let count: i64 = store
+                .connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE task_id=?1"),
+                    [&task.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0);
+        }
+    }
+    #[test]
+    fn permanent_deletion_requires_history_and_rejects_changed_confirmation() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Меняется").unwrap();
+        assert!(store.prepare_permanent_deletion(&task.id).is_err());
+        store.complete_task(&task.id).unwrap();
+        let summary = store.prepare_permanent_deletion(&task.id).unwrap();
+        store.rename_task(&task.id, "Новое название").unwrap();
+        assert!(store.permanently_delete_task(&summary).is_err());
+        let summary = store.prepare_permanent_deletion(&task.id).unwrap();
+        record_event(
+            &store.connection,
+            &task.id,
+            "test",
+            task.created_at,
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        assert!(store.permanently_delete_task(&summary).is_err());
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
+    }
+    #[test]
+    fn permanent_deletion_rolls_back_all_related_data_if_task_delete_fails() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Сохранить при ошибке").unwrap();
+        store.delete_task_at(&task.id, task.created_at).unwrap();
+        store.connection.execute("INSERT INTO focus_sessions(id,task_id,duration_seconds,started_at,running_since,status) VALUES('legacy',?1,60,0,0,'finished')", [&task.id]).unwrap();
+        let summary = store.prepare_permanent_deletion(&task.id).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER reject_purge BEFORE DELETE ON tasks BEGIN SELECT RAISE(ABORT,'failure'); END;").unwrap();
+        assert!(store.permanently_delete_task(&summary).is_err());
+        assert_eq!(store.prepare_permanent_deletion(&task.id).unwrap(), summary);
+        assert_eq!(store.list_deletion_undos(task.created_at).unwrap().len(), 1);
+    }
+    #[test]
+    fn purging_restored_history_task_compacts_queue_and_keeps_independent_timers() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Первая").unwrap();
+        store.complete_task(&task.id).unwrap();
+        store.reopen_task(&task.id).unwrap();
+        let other = store.create_task("Вторая").unwrap();
+        let timer = store
+            .create_timer("Отдельный", 60, task.created_at)
+            .unwrap();
+        let summary = store.prepare_permanent_deletion(&task.id).unwrap();
+        store.permanently_delete_task(&summary).unwrap();
+        assert_eq!(
+            task_by_id(&store.connection, &other.id).unwrap().position,
+            0
+        );
+        assert_eq!(store.list_timers().unwrap()[0].id, timer.id);
+        assert!(store.permanently_delete_task(&summary).is_err());
+    }
     #[test]
     fn removing_a_task_archives_it_keeps_history_and_compacts_the_queue() {
         let store = TaskStore::in_memory().unwrap();

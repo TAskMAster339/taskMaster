@@ -78,6 +78,42 @@ let timerDialogOpen = false;
 let timerError = "";
 let fullscreenTimerId: string | null = null;
 interface UndoDeletion { token: string; taskId: string; title: string; expiresAt: number; }
+interface PermanentDeletionPreview { token: string; task: Task; eventCount: number; sessionCount: number; }
+let purgeOpening = false;
+
+async function openPermanentDeletion(id: string): Promise<void> {
+  if (purgeOpening || document.querySelector("[data-purge-dialog]")) return;
+  purgeOpening = true;
+  try {
+    const preview = await invoke<PermanentDeletionPreview>("prepare_permanent_deletion", { id });
+    const dialog = document.createElement("dialog");
+    dialog.className = "reminder-dialog purge-confirm";
+    dialog.dataset.purgeDialog = "";
+    dialog.setAttribute("aria-labelledby", "purge-heading");
+    dialog.setAttribute("aria-describedby", "purge-description");
+    dialog.innerHTML = `<form><h2 id="purge-heading">Удалить навсегда?</h2><p class="purge-title">${escapeHtml(preview.task.title)}</p><p id="purge-description">Задача и вся её история будут удалены без возможности отмены.</p>${preview.task.status === "active" ? `<p>Сейчас задача находится в активной очереди.</p>` : ""}<p>Событий: ${preview.eventCount}${preview.sessionCount ? ` · Сессий: ${preview.sessionCount}` : ""}</p><div class="reminder-actions"><button type="button" data-purge-cancel autofocus>Отмена</button><button type="submit" class="danger-action">Удалить навсегда</button></div></form>`;
+    document.body.append(dialog);
+    let busy = false;
+    const close = (): void => { dialog.close(); dialog.remove(); root.querySelector<HTMLButtonElement>(`[data-purge-task="${id}"]`)?.focus(); };
+    const cancel = (): void => {
+      if (busy) return;
+      close();
+      void invoke("cancel_permanent_deletion", { token: preview.token }).catch((error) => { errorMessage = backendMessage(error); render(); });
+    };
+    dialog.querySelector("[data-purge-cancel]")?.addEventListener("click", cancel);
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); cancel(); });
+    dialog.querySelector("form")?.addEventListener("submit", async (event) => {
+      event.preventDefault(); if (busy) return; busy = true;
+      dialog.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+      try {
+        await invoke("confirm_permanent_deletion", { token: preview.token });
+        close(); await refreshTasks(); await refreshHistory(); await refreshDeletionUndos();
+      } catch (error) { close(); errorMessage = backendMessage(error); render(); }
+    });
+    dialog.showModal();
+  } catch (error) { errorMessage = backendMessage(error); render(); }
+  finally { purgeOpening = false; }
+}
 let deletionUndos: UndoDeletion[] = [];
 const undoBusy = new Set<string>();
 let undoMessage = "";
@@ -565,6 +601,7 @@ function renderHistoryColumn(title: string, items: HistoryTask[], type: "complet
           <span class="history-task-copy"><span class="history-task-title">${escapeHtml(task.title)}</span></span>
           <time>${formatTime(type === "completed" ? occurredAt : createdAt)}</time>
           ${type === "archived" && task.status === "archived" ? `<button class="history-restore" type="button" data-restore-task="${task.id}" aria-label="Восстановить задачу: ${escapeHtml(task.title)}">↶</button>` : ""}
+          <button class="task-delete" type="button" data-purge-task="${task.id}" aria-label="Удалить навсегда: ${escapeHtml(task.title)}" title="Удалить навсегда"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
         </li>`).join("")
       : `<li class="history-empty">Нет задач</li>`;
   return `<section class="history-column history-column-${type}" aria-labelledby="history-${type}-title">
@@ -961,6 +998,7 @@ async function perform(action: () => Promise<unknown>): Promise<boolean> {
 }
 
 function bindEvents(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-purge-task]").forEach((button) => button.addEventListener("click", () => { if (button.dataset.purgeTask) void openPermanentDeletion(button.dataset.purgeTask); }));
   root.querySelectorAll<HTMLButtonElement>("[data-delete-task]").forEach((button) => button.addEventListener("click", async () => {
     const id = button.dataset.deleteTask; if (!id || saving || taskAnimationLocks.has(id)) return;
     const deleted = await perform(async () => {
@@ -1657,7 +1695,7 @@ window.addEventListener("keydown", (event) => {
   const action = (Object.keys(shortcuts) as ShortcutAction[]).find((key) => shortcuts[key] === combination);
   if (!action) return;
   event.preventDefault();
-  if (root.querySelector("dialog[open]")) return;
+  if (document.querySelector("dialog[open]")) return;
   const target = event.target as HTMLElement;
   const taskAction = ["rename", "reminder", "move_up", "move_down"].includes(action);
   const row = target.closest<HTMLElement>("[data-task-id][data-reorderable='true']");

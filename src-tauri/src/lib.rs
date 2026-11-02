@@ -82,6 +82,58 @@ struct AppState {
     store: Mutex<Result<TaskStore, AppError>>,
 }
 
+#[derive(Default)]
+struct PermanentDeletionState(Mutex<Option<(String, deletions::PurgeSummary)>>);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PermanentDeletionPreview {
+    token: String,
+    #[serde(flatten)]
+    summary: deletions::PurgeSummary,
+}
+
+#[tauri::command]
+fn prepare_permanent_deletion(
+    id: String,
+    state: State<'_, AppState>,
+    pending: State<'_, PermanentDeletionState>,
+) -> Result<PermanentDeletionPreview, AppError> {
+    let summary = with_store(&state, |store| store.prepare_permanent_deletion(&id))?;
+    let token = uuid::Uuid::new_v4().to_string();
+    *pending.0.lock().map_err(|_| AppError::lock())? = Some((token.clone(), summary.clone()));
+    Ok(PermanentDeletionPreview { token, summary })
+}
+
+#[tauri::command]
+fn cancel_permanent_deletion(
+    token: String,
+    pending: State<'_, PermanentDeletionState>,
+) -> Result<(), AppError> {
+    let mut current = pending.0.lock().map_err(|_| AppError::lock())?;
+    if current.as_ref().is_some_and(|(value, _)| value == &token) {
+        *current = None;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn confirm_permanent_deletion(
+    token: String,
+    state: State<'_, AppState>,
+    pending: State<'_, PermanentDeletionState>,
+    app: AppHandle,
+) -> Result<(), AppError> {
+    let mut current = pending.0.lock().map_err(|_| AppError::lock())?;
+    if !current.as_ref().is_some_and(|(value, _)| value == &token) {
+        return Err(AppError::invalid_state());
+    }
+    let (_, expected) = current.take().ok_or_else(AppError::invalid_state)?;
+    with_store(&state, |store| store.permanently_delete_task(&expected))?;
+    let _ = app.emit("tasks-changed", ());
+    Ok(())
+}
+
 struct BackupState {
     directory: PathBuf,
     warning: Mutex<Option<String>>,
@@ -1016,6 +1068,7 @@ pub fn run() {
                     Some("Рабочая база недоступна. Восстановите данные из резервной копии.".into())
                 }
             };
+            app.manage(PermanentDeletionState::default());
             app.manage(BackupState {
                 directory,
                 warning: Mutex::new(warning),
@@ -1146,6 +1199,9 @@ pub fn run() {
             export_user_data,
             list_tasks,
             delete_task,
+            prepare_permanent_deletion,
+            confirm_permanent_deletion,
+            cancel_permanent_deletion,
             undo_task_deletion,
             list_deletion_undos,
             create_task,
