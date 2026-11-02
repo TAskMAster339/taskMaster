@@ -119,6 +119,117 @@ function focusTaskWhenRendered(id: string): void {
 }
 let reminderEditingTaskId: string | null = null;
 let reminderDialogError = "";
+let reminderDraft = "";
+let reminderSaving = false;
+let reminderOpening = false;
+let reminderReturn: { id: string; view: View; scrollTop: number; restoreFocus: boolean; signature: string } | null = null;
+function reminderListSignature(): string {
+  return JSON.stringify(activeTasks().map(({ id, title, status, position }) => [id, title, status, position]));
+}
+function updateRetainedReminder(list: HTMLOListElement): void {
+  if (!reminderReturn) return;
+  const { id } = reminderReturn;
+  const task = tasks.find((item) => item.id === id);
+  const old = list.querySelector<HTMLButtonElement>(`[data-edit-reminder="${CSS.escape(id)}"]`);
+  if (!task || !old) return;
+  const template = document.createElement("template");
+  template.innerHTML = renderTask(task, task.position);
+  const next = template.content.querySelector<HTMLButtonElement>("[data-edit-reminder]");
+  if (!next || old.outerHTML === next.outerHTML) return;
+  const fragment = document.createDocumentFragment(); fragment.append(next);
+  bindEvents(fragment); old.replaceWith(fragment);
+}
+function renderReminderDialog(): void {
+  let dialog = document.querySelector<HTMLDialogElement>("[data-reminder-dialog]");
+  if (!reminderEditingTaskId) { dialog?.close(); dialog?.remove(); return; }
+  const task = tasks.find((item) => item.id === reminderEditingTaskId);
+  if (!task) return;
+  if (!dialog) {
+    const template = document.createElement("template");
+    template.innerHTML = `<dialog class="reminder-dialog" data-reminder-dialog aria-labelledby="reminder-heading" aria-describedby="reminder-error"><form data-reminder-form="${task.id}"><h2 id="reminder-heading">${t("Напоминание")}</h2><label for="reminder-time">${t("Время сегодня")}</label><input aria-describedby="reminder-error" id="reminder-time" name="reminderAt" type="time" step="60" required aria-invalid="${Boolean(reminderDialogError)}" value="${escapeHtml(reminderDraft)}"/><p id="reminder-error" class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div data-reminder-notification-warning ${notificationStatus !== null && !notificationStatus.canTest ? "" : "hidden"}><p>${escapeHtml(backendText(notificationStatus?.message ?? ""))}</p><button class="retry-button" type="button" data-open-notification-settings>${t("Настройки Windows")}</button></div><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">${t("Удалить")}</button>` : ""}<button type="button" data-close-reminder>${t("Отмена")}</button><button type="submit">${t("Сохранить")}</button></div></form></dialog>`;
+    dialog = template.content.querySelector<HTMLDialogElement>("dialog")!;
+    bindReminderDialog(dialog);
+    bindNotificationControls(dialog);
+    document.body.append(dialog);
+  }
+  const input = dialog.querySelector<HTMLInputElement>("#reminder-time")!;
+  if (input.value !== reminderDraft) input.value = reminderDraft;
+  input.setAttribute("aria-invalid", String(Boolean(reminderDialogError)));
+  dialog.querySelector<HTMLElement>("#reminder-error")!.textContent = reminderDialogError;
+  dialog.setAttribute("aria-busy", String(reminderSaving));
+  dialog.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button").forEach((control) => { control.disabled = reminderSaving; });
+  if (!dialog.open) dialog.showModal();
+}
+function bindReminderDialog(dialog: HTMLDialogElement): void {
+  const scope = dialog;
+  scope.querySelector<HTMLInputElement>("#reminder-time")?.addEventListener("input", (event) => { reminderDraft = (event.target as HTMLInputElement).value; });
+  scope.querySelector<HTMLButtonElement>("[data-close-reminder]")?.addEventListener("click", closeReminder);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeReminder();
+  });
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeReminder(); });
+  const saveReminder = async (id: string, clear: boolean): Promise<void> => {
+    if (reminderSaving) return;
+    reminderSaving = true;
+    const dialog = document.querySelector<HTMLDialogElement>("[data-reminder-dialog]");
+    dialog?.setAttribute("aria-busy", "true");
+    dialog?.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button").forEach((control) => { control.disabled = true; });
+    try {
+      if (clear) await invoke("clear_task_reminder", { id });
+      else await invoke("set_task_reminder", { id, reminderAt: todayTimestampForTime(reminderDraft) });
+      const next = await invoke<Task[]>("list_tasks");
+      tasks = next; errorMessage = ""; loadFailed = false;
+      reminderEditingTaskId = null; reminderDialogError = "";
+      if (reminderReturn) reminderReturn.restoreFocus = true;
+      announce(clear ? t("Напоминание удалено") : t("Напоминание сохранено"));
+      reminderSaving = false;
+      const list = root.querySelector<HTMLOListElement>(".task-list");
+      renderReminderDialog();
+      if (list && reminderReturn?.signature === reminderListSignature()) {
+        updateRetainedReminder(list);
+        restoreReminderPosition(list, true);
+      } else render(true);
+    } catch (error) { reminderDialogError = backendMessage(error); }
+    finally { reminderSaving = false; renderReminderDialog(); }
+  };
+  scope.querySelector<HTMLFormElement>("[data-reminder-form]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const id = form.dataset.reminderForm;
+    const value = new FormData(form).get("reminderAt");
+    if (!id || typeof value !== "string") return;
+    reminderDraft = value;
+    void saveReminder(id, false);
+  });
+  scope.querySelector<HTMLButtonElement>("[data-clear-reminder]")?.addEventListener("click", (event) => {
+    const id = (event.currentTarget as HTMLButtonElement).dataset.clearReminder;
+    if (id) void saveReminder(id, true);
+  });
+}
+function closeReminder(): void {
+  if (reminderSaving) return;
+  reminderEditingTaskId = null; reminderDialogError = ""; reminderDraft = "";
+  if (reminderReturn) reminderReturn.restoreFocus = true;
+  renderReminderDialog();
+  restoreReminderPosition(root.querySelector<HTMLOListElement>(".task-list"), true);
+}
+function restoreReminderPosition(list: HTMLOListElement | null, complete: boolean): void {
+  const bookmark = reminderReturn;
+  if (!bookmark) return;
+  if (bookmark.view !== activeView) { reminderReturn = null; return; }
+  const target = list?.querySelector<HTMLButtonElement>(`[data-edit-reminder="${CSS.escape(bookmark.id)}"]`);
+  if (list) list.scrollTop = bookmark.scrollTop;
+  if (!bookmark.restoreFocus) return;
+  const enoughRows = list && list.scrollHeight - list.clientHeight >= bookmark.scrollTop - 1;
+  if ((target && enoughRows) || complete) {
+    const focusTarget = target ?? list ?? root.querySelector<HTMLElement>(".queue-section");
+    if (focusTarget) { if (!target) focusTarget.tabIndex = -1; focusTarget.focus({ preventScroll: true }); }
+    reminderReturn = null;
+  }
+}
+for (const name of ["wheel", "pointerdown", "keydown"] as const) window.addEventListener(name, () => {
+  if (reminderReturn?.restoreFocus && !reminderEditingTaskId) reminderReturn = null;
+}, { capture: true, passive: true });
 let highlightedReminderTaskId: string | null = null;
 let timers: Timer[] = [];
 const timerSnapshots = new Map<string, { remainingSeconds: number; sampledAt: number; status: Timer["status"] }>();
@@ -251,7 +362,7 @@ function updateNotificationControls(): void {
   const message = root.querySelector<HTMLElement>("[data-notification-result]");
   if (message) message.textContent = notificationActionMessage;
   root.querySelectorAll<HTMLButtonElement>("[data-notification-test], [data-notification-refresh]").forEach((button) => { button.disabled = notificationBusy || (button.hasAttribute("data-notification-test") && !notificationStatus?.canTest); });
-  const warning = root.querySelector<HTMLElement>("[data-reminder-notification-warning]");
+  const warning = document.querySelector<HTMLElement>("[data-reminder-notification-warning]");
   if (warning) { warning.hidden = notificationStatus === null || notificationStatus.canTest; warning.querySelector<HTMLElement>("p")!.textContent = backendText(notificationStatus?.message ?? ""); }
 }
 async function refreshNotificationStatus(): Promise<void> {
@@ -272,13 +383,13 @@ function renderNotificationSettings(): string {
     <p role="status" data-notification-result>${escapeHtml(notificationActionMessage)}</p>
   </section>`;
 }
-function bindNotificationControls(): void {
-  root.querySelectorAll<HTMLButtonElement>("[data-open-notification-settings]").forEach((button) => button.addEventListener("click", async () => {
+function bindNotificationControls(scope: ParentNode = root): void {
+  scope.querySelectorAll<HTMLButtonElement>("[data-open-notification-settings]").forEach((button) => button.addEventListener("click", async () => {
     try { await invoke("open_notification_settings"); }
     catch (error) { notificationActionMessage = backendMessage(error); errorMessage = notificationActionMessage; if (activeView === "settings") updateNotificationControls(); else render(true); }
   }));
-  root.querySelector<HTMLButtonElement>("[data-notification-refresh]")?.addEventListener("click", () => { void refreshNotificationStatus(); });
-  root.querySelector<HTMLButtonElement>("[data-notification-test]")?.addEventListener("click", async () => {
+  scope.querySelector<HTMLButtonElement>("[data-notification-refresh]")?.addEventListener("click", () => { void refreshNotificationStatus(); });
+  scope.querySelector<HTMLButtonElement>("[data-notification-test]")?.addEventListener("click", async () => {
     if (notificationBusy) return;
     notificationBusy = true; notificationActionMessage = t("Отправка…"); updateNotificationControls();
     try { await invoke("send_test_notification"); notificationActionMessage = t("Тестовое уведомление отправлено."); }
@@ -965,6 +1076,10 @@ function render(allowDuringAnimation = false): void {
     cancelAnimationFrame(timerAnimationFrame);
     timerAnimationFrame = null;
   }
+  if (reminderEditingTaskId && !tasks.some((task) => task.id === reminderEditingTaskId && task.status === "active")) {
+    reminderEditingTaskId = null;
+    if (reminderReturn) reminderReturn.restoreFocus = true;
+  }
   const previousPositions = root.querySelector("main")?.id === activeView ? captureTaskPositions() : new Map<string, string>();
   const active = activeTasks();
   const completedToday = completedTodayTasks();
@@ -992,6 +1107,8 @@ function render(allowDuringAnimation = false): void {
            <strong>${showingToday ? t("Задач пока нет") : t("Выполненных задач сегодня нет")}</strong>
          </div>`;
 
+  const retainedList = reminderReturn?.view === activeView && reminderReturn.signature === reminderListSignature()
+    ? root.querySelector<HTMLOListElement>(".task-list") : null;
   root.innerHTML = `
     <div class="app-shell">
       ${renderSidebar()}
@@ -1031,11 +1148,6 @@ function render(allowDuringAnimation = false): void {
           ${showingHistory ? `<div class="history-list-container">${historyLoading ? `<div class="loading-state"><span class="spinner" aria-hidden="true"></span><span>${t("Загружаем список…")}</span></div>` : taskList}</div>` : taskList}
         </section>
         ${showingHistory ? renderCalendar() : ""}
-        ${reminderEditingTaskId ? (() => {
-          const task = tasks.find((item) => item.id === reminderEditingTaskId);
-          if (!task) return "";
-          return `<dialog class="reminder-dialog" data-reminder-dialog aria-labelledby="reminder-heading" aria-describedby="reminder-error"><form data-reminder-form="${task.id}"><h2 id="reminder-heading">${t("Напоминание")}</h2><label for="reminder-time">${t("Время сегодня")}</label><input aria-describedby="reminder-error" id="reminder-time" name="reminderAt" type="time" step="60" required value="${reminderInputValue(task.reminderAt)}"/><p id="reminder-error" class="reminder-dialog-error" role="alert">${escapeHtml(reminderDialogError)}</p><div data-reminder-notification-warning ${notificationStatus !== null && !notificationStatus.canTest ? "" : "hidden"}><p>${escapeHtml(backendText(notificationStatus?.message ?? ""))}</p><button class="retry-button" type="button" data-open-notification-settings>${t("Настройки Windows")}</button></div><div class="reminder-actions">${task.reminderAt !== null ? `<button type="button" data-clear-reminder="${task.id}">${t("Удалить")}</button>` : ""}<button type="button" data-close-reminder>${t("Отмена")}</button><button type="submit">${t("Сохранить")}</button></div></form></dialog>`;
-        })() : ""}
         ${overlayShortcutDialogOpen ? `<dialog class="reminder-dialog" data-overlay-shortcut-dialog aria-labelledby="overlay-shortcut-heading"><form data-overlay-shortcut-form><h2 id="overlay-shortcut-heading">${t("Горячая клавиша")}</h2><label for="overlay-shortcut-input">${t("Сочетание клавиш")}</label><input id="overlay-shortcut-input" name="shortcut" type="text" value="${escapeHtml(overlayShortcut)}" placeholder="Ctrl+Shift+O" required aria-describedby="overlay-shortcut-help"/><small id="overlay-shortcut-help">${t("Например: Ctrl+Shift+O")}</small><p class="reminder-dialog-error" role="alert">${escapeHtml(overlayShortcutError)}</p><div class="reminder-actions"><button type="button" data-close-overlay-shortcut>${t("Отмена")}</button><button type="submit">${t("Сохранить")}</button></div></form></dialog>` : ""}
 
       </main>
@@ -1043,6 +1155,10 @@ function render(allowDuringAnimation = false): void {
     </div>`;
 
   bindEvents();
+  if (retainedList) {
+    updateRetainedReminder(retainedList);
+    root.querySelector(".task-list")?.replaceWith(retainedList);
+  }
   animatePositionChanges(previousPositions);
   const list = root.querySelector<HTMLOListElement>(".task-list");
   const firstPending = list?.children.length ?? 0;
@@ -1058,6 +1174,7 @@ function render(allowDuringAnimation = false): void {
       const rename = template.content.querySelector<HTMLInputElement>(".rename-input");
       const entering = batch.find((task) => enteringTaskIds.has(task.id));
       list.append(template.content);
+      restoreReminderPosition(list, list.children.length === visibleTasks.length);
       if (rename) { rename.focus(); rename.select(); }
       if (pendingTaskFocusId && batch.some((task) => task.id === pendingTaskFocusId)) focusTaskWhenRendered(pendingTaskFocusId);
       if (entering) list.querySelector<HTMLElement>(`[data-task-id="${entering.id}"]`)?.scrollIntoView({ block: "nearest" });
@@ -1066,8 +1183,8 @@ function render(allowDuringAnimation = false): void {
   }
   animateEnteringTasks();
   if (pendingTaskFocusId && root.querySelector(`[data-task-id="${CSS.escape(pendingTaskFocusId)}"]`)) focusTaskWhenRendered(pendingTaskFocusId);
-  const reminderDialog = root.querySelector<HTMLDialogElement>("[data-reminder-dialog]");
-  if (reminderDialog && !reminderDialog.open) reminderDialog.showModal();
+  renderReminderDialog();
+  restoreReminderPosition(list, !list || list.children.length === visibleTasks.length);
   const shortcutDialog = root.querySelector<HTMLDialogElement>("[data-overlay-shortcut-dialog]");
   if (shortcutDialog && !shortcutDialog.open) shortcutDialog.showModal();
   if (editingTaskId) {
@@ -1202,45 +1319,18 @@ function bindEvents(scope: ParentNode = root): void {
   }));
   scope.querySelector<HTMLButtonElement>("[data-exit-fullscreen]")?.addEventListener("click", () => { fullscreenTimerId = null; render(true); });
   scope.querySelectorAll<HTMLButtonElement>("[data-edit-reminder]").forEach((button) => button.addEventListener("click", async () => {
-      try { preferences = await invoke<typeof preferences>("get_preferences"); preferencesReady = true; }
-    catch (error) { errorMessage = backendMessage(error); render(true); return; }
-    reminderEditingTaskId = button.dataset.editReminder ?? null;
-    reminderDialogError = "";
-    render(true);
+    if (reminderOpening || reminderEditingTaskId) return;
+    reminderOpening = true;
+    try {
+      preferences = await invoke<typeof preferences>("get_preferences"); preferencesReady = true;
+      const task = tasks.find((item) => item.id === button.dataset.editReminder && item.status === "active");
+      if (!task || activeView !== "today") return;
+      reminderReturn = { id: task.id, view: activeView, scrollTop: root.querySelector<HTMLElement>(".task-list")?.scrollTop ?? 0, restoreFocus: false, signature: reminderListSignature() };
+      reminderEditingTaskId = task.id; reminderDraft = reminderInputValue(task.reminderAt); reminderDialogError = "";
+      renderReminderDialog();
+    } catch (error) { errorMessage = backendMessage(error); render(true); }
+    finally { reminderOpening = false; }
   }));
-  scope.querySelector<HTMLButtonElement>("[data-close-reminder]")?.addEventListener("click", () => { reminderEditingTaskId = null; render(true); });
-  scope.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) { reminderEditingTaskId = null; render(true); }
-  });
-  scope.querySelector<HTMLDialogElement>("[data-reminder-dialog]")?.addEventListener("cancel", () => {
-    reminderEditingTaskId = null;
-  });
-  scope.querySelector<HTMLFormElement>("[data-reminder-form]")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const id = form.dataset.reminderForm;
-    const value = new FormData(form).get("reminderAt");
-    if (!id || typeof value !== "string") return;
-    const timestamp = todayTimestampForTime(value);
-    try {
-      await invoke("set_task_reminder", { id, reminderAt: timestamp });
-      reminderEditingTaskId = null;
-      reminderDialogError = "";
-      await refreshTasks();
-    } catch (error) {
-      reminderDialogError = backendMessage(error);
-      render(true);
-    }
-  });
-  scope.querySelector<HTMLButtonElement>("[data-clear-reminder]")?.addEventListener("click", async (event) => {
-    const id = (event.currentTarget as HTMLButtonElement).dataset.clearReminder;
-    if (!id) return;
-    try {
-      await invoke("clear_task_reminder", { id });
-      reminderEditingTaskId = null;
-      await refreshTasks();
-    } catch (error) { reminderDialogError = backendMessage(error); render(true); }
-  });
   scope.querySelectorAll<HTMLAnchorElement>("[data-view]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
@@ -1791,7 +1881,7 @@ async function loadShortcuts(): Promise<void> {
 }
 void listen<ClearMode>("data-cleared", ({ payload }) => {
   announce(t("Данные очищены"));
-  tasks = []; deletionUndos = []; editingTaskId = null; reminderEditingTaskId = null;
+  tasks = []; deletionUndos = []; editingTaskId = null; reminderEditingTaskId = null; reminderReturn = null;
   highlightedReminderTaskId = null; pendingTaskFocusId = null;
   enteringTaskIds.clear(); taskAnimationLocks.clear();
   if (payload === "allData") { timers = []; timerSnapshots.clear(); fullscreenTimerId = null; timerDialogOpen = false; }

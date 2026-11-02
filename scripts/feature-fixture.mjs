@@ -56,6 +56,6 @@ mockIPC(async (command, args) => {
 window.addEventListener('storage', event => {
   if (event.key === 'fixture.display') { display = JSON.parse(event.newValue); void emit('display-settings-changed', display); }
 });
-window.featureFixture = { calls, setReminderError(value) { reminderError = value; }, setDisplayError(value) { displayError = value; } };
+window.featureFixture = { calls, setReminderError(value) { reminderError = value; }, setDisplayError(value) { displayError = value; }, async removeTask(id) { tasks = tasks.filter(task => task.id !== id); await emit('tasks-changed'); } };
 await import('../src/main.ts');
 window.featureFixture.ready = true;
