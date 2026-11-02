@@ -446,11 +446,16 @@ fn overlay_timer_window_size(timer_count: usize, max_width: f64) -> (f64, f64) {
     if timer_count == 0 {
         return (360.0, 154.0);
     }
-    let rows = timer_count.min(2);
-    let columns = timer_count.div_ceil(2);
-    let natural_width = 32.0 + columns as f64 * 280.0 + columns.saturating_sub(1) as f64 * 12.0;
-    let width = natural_width.max(360.0).min(max_width.max(360.0));
-    let height = 154.0 + 20.0 + rows as f64 * 280.0 + rows.saturating_sub(1) as f64 * 12.0;
+    let columns = timer_count.min(2);
+    let side = 420.0_f64
+        .min(((max_width - 44.0) / 2.0).max(0.0))
+        .max(300.0);
+    let width = if columns > 1 {
+        (columns as f64 * side + 44.0 + 12.0).min(max_width.max(360.0))
+    } else {
+        (side + 32.0).min(max_width.max(360.0))
+    };
+    let height = 154.0 + 20.0 + side;
     (width, height)
 }
 
@@ -471,6 +476,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<WebviewWindow, AppError> {
             .inner_size(360.0, 154.0)
             .position(24.0, 24.0)
             .decorations(false)
+            .transparent(true)
             .resizable(false)
             .focused(false)
             .visible(false)

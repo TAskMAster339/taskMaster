@@ -21,9 +21,9 @@ fn overlay_position_is_clamped_inside_the_monitor_work_area() {
 #[test]
 fn overlay_timer_columns_expand_right_without_growing_beyond_two_rows() {
     assert_eq!(overlay_timer_window_size(0, 1920.0), (360.0, 154.0));
-    assert_eq!(overlay_timer_window_size(1, 1920.0), (360.0, 454.0));
-    assert_eq!(overlay_timer_window_size(4, 1920.0), (604.0, 746.0));
-    assert_eq!(overlay_timer_window_size(20, 500.0), (500.0, 746.0));
+    assert_eq!(overlay_timer_window_size(1, 1920.0), (452.0, 594.0));
+    assert_eq!(overlay_timer_window_size(4, 1920.0), (896.0, 594.0));
+    assert_eq!(overlay_timer_window_size(20, 500.0), (500.0, 474.0));
 }
 
 struct TemporaryDatabase(PathBuf);

@@ -473,7 +473,7 @@ function timerCard(timer: Timer, fullscreen = false, overlay = false): string {
   const circumference = 2 * Math.PI * 86;
   const ring = `<svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true"><circle class="timer-ring-track" cx="100" cy="100" r="86"/><circle class="timer-ring-progress" cx="100" cy="100" r="86" stroke-dasharray="${circumference} ${circumference}" stroke-dashoffset="${circumference * (1 - progress)}"/></svg>`;
   return `<article class="timer-card ${fullscreen ? "timer-card-focus" : ""} ${overlay ? "timer-card-overlay" : ""}" data-timer-card="${timer.id}" data-timer-status="${timer.status}">
-    <div class="timer-card-heading"><h2>${escapeHtml(timer.name)}</h2><div class="timer-card-actions">${fullscreen ? '<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="Выйти из полноэкранного режима"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>' : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="Открыть на весь экран">⛶</button><button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="Удалить таймер">×</button>`}</div></div>
+    <div class="timer-card-heading"><h2>${escapeHtml(timer.name)}</h2>${overlay ? "" : `<div class="timer-card-actions">${fullscreen ? '<button type="button" class="timer-exit-button" data-exit-fullscreen aria-label="Выйти из полноэкранного режима"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>' : `<button type="button" data-timer-fullscreen="${timer.id}" aria-label="Открыть на весь экран">⛶</button><button type="button" class="timer-delete" data-timer-action="delete" data-timer-id="${timer.id}" aria-label="Удалить таймер">×</button>`}</div>`}</div>
     <div class="timer-dial">${ring}<strong class="timer-clock" data-timer-clock>${formatTimerTime(timer.remainingSeconds)}</strong></div>
     <div class="timer-footer">
       <div class="timer-controls">
@@ -1056,8 +1056,21 @@ async function renderOverlay(): Promise<void> {
       }
       const pinned = await invoke<boolean>("get_overlay_pinned");
       const task = active[0];
-      const renderKey = JSON.stringify([task?.id, task?.title, task?.position, pinned, overlayError, displayTimers.map((timer) => [timer.id, timer.remainingSeconds, timer.status, endingTimers.has(timer.id)])]);
-      if (renderKey === lastRenderKey) return;
+      const renderKey = JSON.stringify([task?.id, task?.title, task?.position, pinned, overlayError, displayTimers.map((timer) => [timer.id, timer.status, endingTimers.has(timer.id)])]);
+      if (renderKey === lastRenderKey) {
+        for (const timer of displayTimers) {
+          const card = overlayRoot.querySelector<HTMLElement>(`[data-timer-card="${CSS.escape(timer.id)}"]`);
+          const clock = card?.querySelector<HTMLElement>("[data-timer-clock]");
+          const progress = card?.querySelector<SVGCircleElement>(".timer-ring-progress");
+          if (clock) clock.textContent = formatTimerTime(timer.remainingSeconds);
+          if (progress) {
+            const circumference = 2 * Math.PI * 86;
+            const ratio = timer.durationSeconds > 0 ? timer.remainingSeconds / timer.durationSeconds : 0;
+            progress.setAttribute("stroke-dashoffset", String(circumference * (1 - ratio)));
+          }
+        }
+        return;
+      }
       lastRenderKey = renderKey;
       overlayRoot.innerHTML = `<section class="overlay-card" aria-label="Следующая задача">
         <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>СЛЕДУЮЩАЯ ЗАДАЧА</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? "Снять закрепление и разрешить перемещение" : "Закрепить положение поверх окон"}" title="${pinned ? "Открепить" : "Закрепить положение и поверх окон"}">${pinned ? "◆" : "◇"}</button></header>
