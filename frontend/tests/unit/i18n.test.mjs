@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { t, setLanguage, locale, language, backendText } from '../../src/i18n.ts';
-import messages from '../../src/messages.json' with { type: 'json' };
-import { shortcutLabels, displayShortcut } from '../../src/shortcuts.ts';
+import { t, setLanguage, locale, language, backendText } from '../../src/shared/i18n.ts';
+import messages from '../../src/shared/messages.json' with { type: 'json' };
+import { shortcutLabels, displayShortcut } from '../../src/shared/shortcuts.ts';
 test('Japanese default, language switching and user placeholders', () => {
  assert.equal(language(), 'ja'); assert.equal(t('Настройки'), '設定');
  setLanguage('en'); assert.equal(t('Настройки'), 'Settings'); assert.equal(locale(), 'en-US');

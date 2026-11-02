@@ -1,6 +1,6 @@
 // Development-only fixture. Browser: mocked data. Native: explicitly seeded disposable DB.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
-import { defaultShortcuts } from '../../src/shortcuts.ts';
+import { defaultShortcuts } from '../../src/shared/shortcuts.ts';
 
 const count = Math.min(5000, Math.max(1, Number(new URLSearchParams(location.search).get('count')) || 5000));
 const now = Date.now();

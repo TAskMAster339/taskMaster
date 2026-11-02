@@ -1,7 +1,7 @@
 // Development-only browser fixture. Never reads or modifies the native database.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
-import { defaultShortcuts } from '../../src/shortcuts.ts';
+import { defaultShortcuts } from '../../src/shared/shortcuts.ts';
 if (window.__TAURI_INTERNALS__) throw Error('Browser fixture must not run in Tauri');
 const query = new URLSearchParams(location.search);
 const count = Number(query.get('count') || 100);

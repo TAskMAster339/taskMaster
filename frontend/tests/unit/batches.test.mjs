@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendInBatches } from '../../src/batches.ts';
+import { appendInBatches } from '../../src/shared/batches.ts';
 
 test('yields between bounded batches and preserves exact order and offsets', () => {
   const frames = [], calls = [];
