@@ -2,6 +2,7 @@
 name = "taskmaster"
 version = "0.1.0"
 description = "Local daily task manager"
+license = "MIT"
 authors = ["taskMaster"]
 edition = "2024"
 
