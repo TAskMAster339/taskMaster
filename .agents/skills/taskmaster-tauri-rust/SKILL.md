@@ -7,7 +7,7 @@ description: Use when implementing or changing Taskmaster's Rust domain layer, T
 
 Use this workflow for backend and native desktop behavior in this repository.
 
-1. Read the relevant behavior and module ownership in `README.md`, then inspect the current Rust/Tauri implementation before editing.
+1. Read the relevant behavior in `docs/BEHAVIOR.md` and module ownership in `docs/DEVELOPMENT.md`, then inspect the current Rust/Tauri implementation before editing.
 2. Keep domain rules and persistence in Rust. Expose focused, typed Tauri commands; return actionable errors rather than swallowing failures or exposing raw database details to the UI.
 3. Preserve the specified invariants: stable task IDs, manual queue order, 24-hour archival without deletion, append-only history, recoverable local storage, and multiple independent timers may run concurrently. Put related database changes in transactions.
 4. Keep app capabilities and plugins minimal. No account, network, analytics, or cloud behavior belongs in MVP.

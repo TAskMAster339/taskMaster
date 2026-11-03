@@ -7,7 +7,7 @@ description: Use when defining or revising Taskmaster's visual direction, screen
 
 Use this workflow for product and visual design decisions; use `$taskmaster-ui` when directly implementing frontend code.
 
-1. Read the relevant user scenario and UI constraints in `README.md`, then inspect the current interface and reusable components if they exist. Design for the actual small, single-user daily-planning workflow.
+1. Read the relevant user scenario and UI constraints in `docs/BEHAVIOR.md`, then inspect the current interface and reusable components if they exist. Design for the actual small, single-user daily-planning workflow.
 1a. Read `DESIGN.md` before making visual decisions. Keep new work aligned with its palette, typography, component states, and motion rules; revise it when the user approves a lasting visual-system change.
 1b. `DESIGN.md` mirrors the user's portfolio system, **The Shibuya Release Sleeve**. Keep its exact obi/riso red and paper/ink palette, Oswald + IBM Plex Sans typography, washi textures, square corners, thin editorial rules, and flat surfaces. The authoritative reference is https://github.com/TAskMAster339/TAskMAster339.github.io/blob/main/DESIGN.md; inspect the live site at https://taskmaster339.github.io/ when the user asks for portfolio parity. Bundle fonts/textures locally; do not add runtime network dependencies. Adapt the layout to taskMaster's task workflows without importing portfolio-only content or interactions.
 1c. The app seal uses the meaningful Japanese kanji `整` in Noto Sans JP on a square Obi Red field, as specified in `DESIGN.md`. Keep it in native app/window/taskbar icon assets only; never use pseudo-Japanese glyphs or put the seal back into the app content UI.
