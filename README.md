@@ -62,7 +62,7 @@ npm ci
 npm run tauri -- build --bundles msi
 ```
 
-MSI появится в `src-tauri\target\release\bundle\msi\`. Подробнее о запуске, архитектуре и проверках — в [документации разработчика](docs/DEVELOPMENT.md).
+MSI появится в `src-tauri\target\release\bundle\msi\`. Подробнее о разработке своей фичи, архитектуре и переносе на Linux/macOS — в [документации разработчика](docs/README.md).
 
 ## Участие в разработке
 
