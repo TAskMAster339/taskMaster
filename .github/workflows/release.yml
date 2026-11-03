@@ -163,6 +163,7 @@ jobs:
       - name: Archive changelog entries after successful publication
         shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_DATE: ${{ steps.release.outputs.date }}
         run: |
