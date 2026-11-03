@@ -1,0 +1,3 @@
+interface:
+  display_name: "Taskmaster Documentation"
+  short_description: "Maintain Taskmaster docs after feature changes"
