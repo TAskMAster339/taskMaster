@@ -1,0 +1,62 @@
+name: Ошибка
+description: Сообщить о воспроизводимой проблеме в taskMaster.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Перед отправкой проверьте существующие issues. Не прикладывайте рабочую SQLite-базу, секреты или личные данные. Скриншоты и фрагменты диагностики обезличьте.
+  - type: input
+    id: version
+    attributes:
+      label: Версия taskMaster
+      description: Указана в настройках в разделе «О приложении». Для сборки из исходников укажите commit.
+      placeholder: 0.1.0 или хеш коммита
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows
+      placeholder: Windows 11 24H2, x64
+    validations:
+      required: true
+  - type: dropdown
+    id: distribution
+    attributes:
+      label: Способ запуска
+      options:
+        - MSI-установка
+        - Самостоятельный exe
+        - Режим разработки
+        - Другое
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. Открыть…
+        2. Нажать…
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что произошло
+      description: Укажите точный текст ошибки, если он есть.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Скриншоты и дополнительный контекст
+      description: Необязательно. Например, язык, тема, масштаб Windows, число мониторов или обезличенный фрагмент диагностики.

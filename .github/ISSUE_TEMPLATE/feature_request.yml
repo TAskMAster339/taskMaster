@@ -1,0 +1,34 @@
+name: Предложение
+description: Предложить улучшение taskMaster.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Проверьте существующие issues. taskMaster остаётся локальным менеджером задач для Windows; крупные изменения сначала обсуждаем здесь.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему нужно решить?
+      description: Опишите конкретную ситуацию использования.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Желаемый результат
+      description: Что пользователь должен получить и как понять, что задача решена?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Рассмотренные альтернативы
+      description: Какие другие решения или обходные пути вы пробовали? Если не рассматривали — так и напишите.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Дополнительный контекст
+      description: Необязательно. Можно приложить обезличенный пример или эскиз.
