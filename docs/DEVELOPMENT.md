@@ -8,7 +8,7 @@ Tauri 2, Rust, TypeScript без UI-фреймворка и SQLite. Данные
 
 ## Быстрый старт
 
-Команды выполняются из корня репозитория. Windows — текущая целевая платформа; подготовка Linux/macOS и известные ограничения описаны в [PORTING.md](PORTING.md).
+Команды выполняются из корня репозитория. Подготовка Fedora и экспериментальных сборок для других Linux и macOS описаны в [PORTING.md](PORTING.md).
 
 ```powershell
 git clone https://github.com/TAskMAster339/taskMaster.git
@@ -60,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Start-TaskMaster.ps1
 
 ## CI и релизы GitHub
 
-Workflow [CI](../.github/workflows/ci.yml) запускается при push и pull request на Windows runner: Rust format/test/Clippy, frontend unit/browser-тесты с accessibility и production-сборка frontend. Ручной workflow [Publish Release](../.github/workflows/release.yml) доступен во вкладке **Actions** на default branch. Он повторно выполняет эти проверки, собирает `.exe` и MSI-установщик, прикладывает оба файла к release с версией и датой в теге и к release с тегом `latest`.
+Workflow [CI](../.github/workflows/ci.yml) запускается при push и pull request на Windows и Fedora 45: Rust format/test/Clippy, frontend unit-тесты и production-сборка frontend. Браузерные тесты с проверкой доступности выполняются на Windows. Ручной workflow [Publish Release](../.github/workflows/release.yml) доступен во вкладке **Actions** на default branch. Он повторно выполняет эти проверки, собирает `.exe`, MSI-установщик и Fedora 45 x86‑64 RPM, прикладывает все три файла к release с версией и датой в теге и к release с тегом `latest`.
 
 Перед запуском внесите заметные изменения в `CHANGELOG.md` в секцию `Unreleased`. После успешной публикации workflow открывает PR с переносом этих записей в секцию выпущенной версии и даты. История сохраняется, а `Unreleased` становится пустой после слияния PR. Проверьте и влейте этот PR перед следующим релизом. Если публикация завершается ошибкой, PR не создаётся и записи остаются для повторного запуска.
 
@@ -99,9 +99,9 @@ npm run build
 | Ошибка MSVC/linker или Windows SDK | Установлены ли C++ Build Tools и stable MSVC Rust; проверьте `rustup show` и `npm run tauri -- info` |
 | Порт 1420 занят | Не запущен ли второй dev/Vite-процесс; остановите свой предыдущий экземпляр перед повторным запуском |
 | Chromium для browser-тестов не найден | После `npm ci` выполните `npx playwright install chromium` |
-| Открывается установленное окно вместо dev-сборки | Приложение single-instance; полностью завершите установленный экземпляр через трей, закрытие окна лишь скрывает его |
+| Открывается установленное окно вместо dev-сборки | Приложение single-instance; полностью завершите установленный экземпляр через трей, в Windows закрытие окна лишь скрывает его |
 | База недоступна или восстановление прервано | Сохраните исходные файлы; используйте [восстановление](BEHAVIOR.md#резервные-копии-и-восстановление), не удаляйте базу ради запуска |
 | На Linux нет WebKitGTK/pkg-config или не появляется окно | Сверьте системные зависимости и графическую сессию по [PORTING.md](PORTING.md) |
-| TypeScript/сборка проходит, а системное действие не работает | Проверьте backend-ошибку и нативное поведение; на Linux/macOS часть действий пока возвращает Windows-specific ошибки |
+| TypeScript/сборка проходит, а системное действие не работает | Проверьте backend-ошибку и нативное поведение; проверьте поддержку интеграции в целевой сессии |
 
 Dev-сборка по умолчанию использует тот же identifier и данные, что установленное приложение. Для destructive-проверок нужен одноразовый профиль ОС; подробнее об изоляции в [PORTING.md](PORTING.md#данные-и-проверки). Не прикладывайте рабочую базу к issue. Обезличенные технические коды находятся в `logs/` папки данных; их формат и ограничения описаны в [BEHAVIOR.md](BEHAVIOR.md#диагностика).

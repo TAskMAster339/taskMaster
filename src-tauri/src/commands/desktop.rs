@@ -1,3 +1,8 @@
+#[tauri::command]
+pub(crate) fn uses_linux_desktop() -> bool {
+    cfg!(target_os = "linux")
+}
+
 use crate::{
     app::error::AppError,
     platform::{desktop, notifications},
@@ -13,8 +18,10 @@ pub(crate) fn set_autostart_enabled(enabled: bool, app: AppHandle) -> Result<boo
     desktop::set_autostart_enabled(enabled, app)
 }
 #[tauri::command]
-pub(crate) fn open_about_link(url: String) -> Result<(), AppError> {
-    desktop::open_about_link(url)
+pub(crate) async fn open_about_link(url: String) -> Result<(), AppError> {
+    tauri::async_runtime::spawn_blocking(move || desktop::open_about_link(url))
+        .await
+        .map_err(|_| desktop::link_error())?
 }
 #[tauri::command]
 pub(crate) async fn get_notification_status(

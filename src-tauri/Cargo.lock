@@ -3576,6 +3576,7 @@ dependencies = [
  "uuid",
  "windows",
  "windows-registry",
+ "zbus",
 ]
 
 [[package]]

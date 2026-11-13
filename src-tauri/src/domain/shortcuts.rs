@@ -95,7 +95,10 @@ pub fn validate(bindings: &BTreeMap<String, String>, overlay: &str) -> Result<()
     if bindings.keys().ne(defaults().keys()) {
         return Err(invalid());
     }
-    let mut occupied = HashSet::from([normalize(overlay)?]);
+    let mut occupied = HashSet::new();
+    if !overlay.is_empty() {
+        occupied.insert(normalize(overlay)?);
+    }
     for value in bindings.values() {
         if !occupied.insert(normalize(value)?) {
             return Err(AppError {

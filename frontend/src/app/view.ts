@@ -102,7 +102,7 @@ export function render(allowDuringAnimation = false): void {
               <span class="progress-count">${String(showingHistory ? historyCount : visibleTasks.length).padStart(2, "0")}</span>
             </div>
             <button class="overlay-toggle" type="button" data-toggle-overlay>${t("Оверлей")}</button>
-            ${settingsState.overlayShortcutAvailable ? "" : `<button class="overlay-shortcut-warning" type="button" data-open-overlay-shortcut>${t("Настроить клавишу")}</button>`}
+            ${settingsState.usesLinuxDesktop || settingsState.overlayShortcutAvailable ? "" : `<button class="overlay-shortcut-warning" type="button" data-open-overlay-shortcut>${t("Настроить клавишу")}</button>`}
           </div>
         </section>
 

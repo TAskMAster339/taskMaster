@@ -21,7 +21,10 @@ pub enum Event {
     ReminderError,
     TimerError,
     NotificationError,
+    #[cfg(not(target_os = "linux"))]
     ShortcutConflict,
+    #[cfg(target_os = "linux")]
+    DesktopError,
     Panic,
 }
 

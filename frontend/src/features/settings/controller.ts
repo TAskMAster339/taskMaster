@@ -46,7 +46,7 @@ export async function refreshAutostart(): Promise<void> {
 }
 export function renderAutostartSettings(): string {
     return `<section class="settings-section" aria-labelledby="startup-heading"><h2 id="startup-heading">${t("Запуск")}</h2>
-    <label class="settings-check"><input type="checkbox" data-autostart ${settingsState.autostartEnabled ? "checked" : ""} ${settingsState.autostartBusy || settingsState.autostartEnabled === null ? "disabled" : ""}/><span>${t("Запускать с Windows")}</span></label>
+    <label class="settings-check"><input type="checkbox" data-autostart ${settingsState.autostartEnabled ? "checked" : ""} ${settingsState.autostartBusy || settingsState.autostartEnabled === null ? "disabled" : ""}/><span>${t(settingsState.usesLinuxDesktop ? "Запускать при входе в систему" : "Запускать с Windows")}</span></label>
     <p role="status" data-autostart-status>${escapeHtml(settingsState.autostartMessage)}</p>
     <button class="retry-button" type="button" data-autostart-retry ${settingsState.autostartEnabled === null ? "" : "hidden"}>${t("Повторить проверку")}</button>
   </section>`;
@@ -124,7 +124,7 @@ export function renderNotificationSettings(): string {
     <p data-notification-identity ${settingsState.notificationStatus?.usesSystemIdentity ? "" : "hidden"}>${t("В этой сборке отправитель — Windows PowerShell.")}</p>
     <div class="settings-actions"><button class="retry-button" type="button" data-notification-test ${settingsState.notificationBusy || !settingsState.notificationStatus?.canTest ? "disabled" : ""}>${t("Проверить уведомление")}</button>
     <button class="retry-button" type="button" data-notification-refresh ${settingsState.notificationBusy ? "disabled" : ""}>${t("Обновить состояние")}</button>
-    <button class="retry-button" type="button" data-open-notification-settings>${t("Настройки Windows")}</button></div>
+    ${settingsState.usesLinuxDesktop ? "" : `<button class="retry-button" type="button" data-open-notification-settings>${t("Настройки Windows")}</button>`}</div>
     <p role="status" data-notification-result>${escapeHtml(settingsState.notificationActionMessage)}</p>
   </section>`;
 }
@@ -151,7 +151,7 @@ export function bindNotificationControls(scope: ParentNode = root): void {
         updateNotificationControls();
         try {
             await invoke("send_test_notification");
-            settingsState.notificationActionMessage = t("Тестовое уведомление отправлено.");
+            settingsState.notificationActionMessage = t(settingsState.usesLinuxDesktop ? "Тестовое уведомление поставлено в очередь." : "Тестовое уведомление отправлено.");
         }
         catch (error) {
             settingsState.notificationActionMessage = backendMessage(error);
@@ -250,9 +250,11 @@ export function bindBackupSettings(): void {
             settingsState.preferences = await invoke("get_preferences");
             settingsState.preferencesReady = true;
             await Promise.all([effects.refreshTasks(), effects.refreshTimers(false), loadShortcuts(), effects.refreshDeletionUndos()]);
-            const overlayStatus = await invoke("get_overlay_shortcut_status");
-            settingsState.overlayShortcut = overlayStatus.shortcut;
-            settingsState.overlayShortcutAvailable = overlayStatus.available;
+            if (!settingsState.usesLinuxDesktop) {
+                const overlayStatus = await invoke("get_overlay_shortcut_status");
+                settingsState.overlayShortcut = overlayStatus.shortcut;
+                settingsState.overlayShortcutAvailable = overlayStatus.available;
+            }
             settingsState.backupMessage = `${t("Данные восстановлены. Предыдущие данные сохранены:")} ${path}`;
             await refreshBackupStatus();
         }
@@ -278,6 +280,7 @@ export function renderSettings(): void {
     <label class="settings-check"><input id="settings-contrast" type="checkbox" data-high-contrast ${settingsState.displaySettings.highContrast ? "checked" : ""} ${settingsState.displaySettingsReady ? "" : "disabled"}/><span>${t("Высокий контраст")}</span></label>
     <p role="alert" data-settings-error>${escapeHtml(settingsState.displaySettingsError)}</p></section>
     ${renderAutostartSettings()}
+    ${settingsState.usesLinuxDesktop ? `<section class="settings-section"><h2>${t("Трей")}</h2><button class="retry-button" type="button" data-hide-to-tray>${t("Свернуть в трей")}</button><p role="status" data-tray-status></p></section>` : ""}
     ${renderNotificationSettings()}
     <section class="settings-section"><h2>${t("Задачи")}</h2><form data-preferences-form>
       <label for="reminder-minutes">${t("Время до напоминания, минуты")}</label><input id="reminder-minutes" name="reminderMinutes" type="number" min="1" max="1439" step="1" required value="${settingsState.preferences.reminderMinutes}" ${settingsState.preferencesReady ? "" : "disabled"}/>
@@ -288,8 +291,9 @@ export function renderSettings(): void {
     <section class="settings-section shortcut-section" aria-labelledby="shortcuts-heading"><h2 id="shortcuts-heading">${t("Горячие клавиши")}</h2>
       <p>${t("Нажмите поле и сочетание клавиш, затем сохраните. Escape отменяет ввод. Команды задач работают при фокусе на строке.")}</p>
       <p role="alert">${escapeHtml(settingsState.shortcutsError)}</p>
+      ${settingsState.usesLinuxDesktop ? `<p>${t("Глобальную клавишу оверлея задайте в настройках окружения для команды")} <code class="overlay-shortcut-command">taskmaster --toggle-overlay</code>.</p>` : ""}
       <div class="shortcut-table" role="group" aria-label="${t("Горячие клавиши")}">
-      ${([...Object.keys(shortcutLabels), "overlay"] as (ShortcutAction | "overlay")[]).map((action) => {
+      ${([...Object.keys(shortcutLabels), ...(settingsState.usesLinuxDesktop ? [] : ["overlay"])] as (ShortcutAction | "overlay")[]).map((action) => {
         const value = action === "overlay" ? settingsState.overlayShortcut : settingsState.shortcuts[action];
         return `<form class="shortcut-row" aria-label="${action === "overlay" ? t("Оверлей") : shortcutLabels[action]}" data-shortcut-form="${action}"><div><label for="shortcut-${action}">${action === "overlay" ? t("Показать / скрыть оверлей") : shortcutLabels[action]}</label><small>${action === "overlay" ? t("Глобально") : t("В приложении")}</small></div><div><input id="shortcut-${action}" data-shortcut-capture data-combination="${escapeHtml(value)}" value="${escapeHtml(displayShortcut(value))}" readonly aria-label="${t("Сочетание:")} ${action === "overlay" ? t("Оверлей") : shortcutLabels[action]}" ${settingsState.shortcutsReady ? "" : "disabled"}/></div><div><button class="retry-button" type="submit" ${settingsState.shortcutsReady ? "" : "disabled"}>${t("Сохранить")}</button></div><p role="status" data-shortcut-status>${action === "overlay" && !settingsState.overlayShortcutAvailable ? t("Не удалось зарегистрировать сочетание. Выберите другое.") : ""}</p></form>`;
     }).join("")}</div>
@@ -460,6 +464,21 @@ export async function refreshDiagnosticsWarning(): Promise<void> {
         status.textContent = backendText(warning ?? "");
 }
 export function bindSettingsEvents(scope: ParentNode): void {
+    scope.querySelector<HTMLButtonElement>("[data-hide-to-tray]")?.addEventListener("click", async (event) => {
+        const button = event.currentTarget as HTMLButtonElement;
+        const status = scope.querySelector<HTMLElement>("[data-tray-status]")!;
+        button.disabled = true;
+        status.textContent = "";
+        try {
+            await invoke("hide_to_tray");
+        }
+        catch (error) {
+            status.textContent = backendMessage(error);
+        }
+        finally {
+            button.disabled = false;
+        }
+    });
     scope.querySelector<HTMLButtonElement>("[data-toggle-overlay]")?.addEventListener("click", async () => {
         try {
             await invoke("toggle_task_overlay");

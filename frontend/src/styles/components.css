@@ -314,7 +314,28 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
 .settings-section { max-width: 560px; padding-block: 24px; border-top: 1px solid var(--line); }
 .settings-section h2 { margin: 0 0 24px; font: 600 22px/1.2 "Oswald", sans-serif; }
 .settings-section label { display: block; margin-bottom: 8px; }
-.settings-section select { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--surface); color: var(--text); font: inherit; }
+.settings-section select {
+  appearance: none;
+  color-scheme: light;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 32px 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background-color: var(--surface);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 17px center, right 12px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--text);
+  font: inherit;
+}
+:root[data-theme="dark"] .settings-section select { color-scheme: dark; }
+.settings-section select option { background-color: var(--surface); color: var(--text); }
+@media (forced-colors: active) {
+  .settings-section select { appearance: auto; background-image: none; }
+}
 
 .settings-section input { width: 100%; min-height: 44px; margin-bottom: 20px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--surface); color: var(--text); font: inherit; }
 .settings-section p { overflow-wrap: anywhere; }
@@ -423,3 +444,5 @@ body.is-task-dragging *, body.is-overlay-timer-dragging * { user-select: none !i
  :is(button, input, select, dialog) { border: 1px solid ButtonText; }
  :is(.timer-ring-progress, .timer-ring-track) { stroke: CanvasText; }
 }
+
+.overlay-shortcut-command { overflow-wrap: anywhere; }

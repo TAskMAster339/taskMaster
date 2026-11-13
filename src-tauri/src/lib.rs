@@ -2,10 +2,12 @@ use crate::commands::deletions::{
     cancel_permanent_deletion, clear_user_data, confirm_permanent_deletion, delete_task,
     list_deletion_undos, prepare_permanent_deletion, undo_task_deletion,
 };
+#[cfg(not(target_os = "linux"))]
+use crate::commands::overlay::set_overlay_shortcut;
 use crate::commands::overlay::{
     complete_overlay_task, get_overlay_pinned, get_overlay_shortcut_status,
     open_overlay_timer_focus, open_task_list, resize_overlay_for_timers, set_overlay_pinned,
-    set_overlay_shortcut, toggle_task_overlay,
+    toggle_task_overlay,
 };
 use crate::commands::settings::{
     get_app_version, get_preferences, get_shortcuts, update_preferences, update_shortcut,
@@ -22,7 +24,9 @@ use crate::commands::tasks::{
 use crate::commands::timers::{
     create_timer, delete_timer, list_timers, pause_timer, reset_timer, start_timer,
 };
-use crate::platform::windows::{show_main_window, toggle_overlay};
+use crate::platform::windows::show_main_window;
+#[cfg(not(target_os = "linux"))]
+use crate::platform::windows::toggle_overlay;
 mod app;
 mod commands;
 mod domain;
@@ -33,7 +37,32 @@ mod tests;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            #[cfg(target_os = "linux")]
+            if platform::linux_launch::toggle_requested(args) {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    platform::windows::toggle_overlay_from_desktop(&handle)
+                });
+                return;
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = args;
+            show_main_window(app);
+        }));
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, _shortcut, event| {
+                use tauri_plugin_global_shortcut::ShortcutState;
+                if event.state() == ShortcutState::Pressed {
+                    let _ = toggle_overlay(app);
+                }
+            })
+            .build(),
+    );
+    builder
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name("taskMaster")
@@ -41,22 +70,11 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    use tauri_plugin_global_shortcut::ShortcutState;
-                    if event.state() == ShortcutState::Pressed {
-                        let _ = toggle_overlay(app);
-                    }
-                })
-                .build(),
-        )
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main_window(app);
-        }))
         .setup(app::bootstrap::setup)
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            commands::desktop::uses_linux_desktop,
+            platform::tray::hide_to_tray,
             commands::settings::get_display_settings,
             commands::settings::update_display_settings,
             commands::desktop::open_about_link,
@@ -106,6 +124,7 @@ pub fn run() {
             set_overlay_pinned,
             get_overlay_pinned,
             get_overlay_shortcut_status,
+            #[cfg(not(target_os = "linux"))]
             set_overlay_shortcut,
             complete_overlay_task,
             open_task_list,

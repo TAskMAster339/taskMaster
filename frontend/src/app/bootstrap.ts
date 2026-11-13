@@ -24,6 +24,7 @@ import { appState } from "./state.ts";
 import { render } from "./view.ts";
 export async function startApp(): Promise<void> {
     configureFeatures();
+    settingsState.usesLinuxDesktop = (await invoke("uses_linux_desktop").catch(() => false)) === true;
     try {
         settingsState.displaySettings = await invoke("get_display_settings");
         setLanguage(settingsState.displaySettings.language);
@@ -281,15 +282,17 @@ export async function startApp(): Promise<void> {
             tasksState.errorMessage = `${backendText(payload)} ${t("Проверьте, не занято ли сочетание другой программой.")}`;
             render(true);
         });
-        void invoke("get_overlay_shortcut_status").then((status) => {
-            settingsState.overlayShortcut = status.shortcut;
-            settingsState.overlayShortcutAvailable = status.available;
-            if (!status.available)
-                tasksState.errorMessage = `${t("Не удалось зарегистрировать")} ${status.shortcut}. ${t("Можно выбрать другое сочетание клавиш.")}`;
-            render(true);
-        }).catch((error) => {
-            tasksState.errorMessage = backendMessage(error);
-            render(true);
-        });
+        if (!settingsState.usesLinuxDesktop) {
+            void invoke("get_overlay_shortcut_status").then((status) => {
+                settingsState.overlayShortcut = status.shortcut;
+                settingsState.overlayShortcutAvailable = status.available;
+                if (!status.available)
+                    tasksState.errorMessage = `${t("Не удалось зарегистрировать")} ${status.shortcut}. ${t("Можно выбрать другое сочетание клавиш.")}`;
+                render(true);
+            }).catch((error) => {
+                tasksState.errorMessage = backendMessage(error);
+                render(true);
+            });
+        }
     }
 }

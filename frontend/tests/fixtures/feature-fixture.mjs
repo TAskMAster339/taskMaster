@@ -13,11 +13,17 @@ let reminderError = false;
 let displayError = false;
 let databaseError = false;
 let resetError = false;
+let trayAvailable = false;
+let overlayPinned = false;
 const calls = [];
 mockWindows(query.get('window') === 'overlay' ? 'overlay' : 'main');
 mockIPC(async (command, args) => {
   calls.push({ command, args });
   switch (command) {
+    case 'uses_linux_desktop': return query.has('linux');
+    case 'hide_to_tray':
+      if (!trayAvailable) throw { code: 'tray_unavailable', message: 'Не удалось свернуть приложение в трей.' };
+      return;
     case 'get_display_settings': return display;
     case 'update_display_settings':
       if (displayError) throw { code: 'presentation_error', message: 'Не удалось сохранить настройки отображения. Повторите попытку.' };
@@ -39,7 +45,8 @@ mockIPC(async (command, args) => {
       return tasks;
     case 'get_next_task': return tasks[0] || null;
     case 'list_timers': return timers;
-    case 'get_overlay_pinned': return false;
+    case 'get_overlay_pinned': return overlayPinned;
+    case 'set_overlay_pinned': overlayPinned = args.pinned; return;
     case 'resize_overlay_for_timers': return 1;
     case 'set_task_reminder':
     case 'clear_task_reminder': {
@@ -65,6 +72,6 @@ mockIPC(async (command, args) => {
 window.addEventListener('storage', event => {
   if (event.key === 'fixture.display') { display = JSON.parse(event.newValue); void emit('display-settings-changed', display); }
 });
-window.featureFixture = { calls, resetRequested: false, setResetError(value) { resetError = value; }, async setDatabaseError(value) { databaseError = value; await emit('tasks-changed'); }, setReminderError(value) { reminderError = value; }, setDisplayError(value) { displayError = value; }, async removeTask(id) { tasks = tasks.filter(task => task.id !== id); await emit('tasks-changed'); } };
+window.featureFixture = { calls, resetRequested: false, setTrayAvailable(value) { trayAvailable = value; }, setResetError(value) { resetError = value; }, async setDatabaseError(value) { databaseError = value; await emit('tasks-changed'); }, setReminderError(value) { reminderError = value; }, setDisplayError(value) { displayError = value; }, async removeTask(id) { tasks = tasks.filter(task => task.id !== id); await emit('tasks-changed'); } };
 await import('../../src/main.ts');
 window.featureFixture.ready = true;

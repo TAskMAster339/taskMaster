@@ -1,6 +1,7 @@
 use crate::app::error::AppError;
 use crate::app::state::{AppState, OverlayState, with_store};
 use crate::domain::overlay::OverlayShortcutStatus;
+#[cfg(not(target_os = "linux"))]
 use crate::domain::shortcuts;
 use crate::persistence::overlay::save_overlay_settings;
 use crate::platform::windows::{
@@ -19,12 +20,15 @@ pub(crate) fn set_overlay_pinned(
     app: AppHandle,
     state: State<'_, OverlayState>,
 ) -> Result<(), AppError> {
+    #[cfg(target_os = "linux")]
+    let _ = app;
     let previous = state.settings.lock().map_err(|_| AppError::lock())?.pinned;
     state.settings.lock().map_err(|_| AppError::lock())?.pinned = pinned;
     if save_overlay_settings(&state).is_err() {
         state.settings.lock().map_err(|_| AppError::lock())?.pinned = previous;
         return Err(AppError::storage());
     }
+    #[cfg(not(target_os = "linux"))]
     if let Some(window) = app.get_webview_window("overlay")
         && window.set_always_on_top(pinned).is_err()
     {
@@ -54,6 +58,7 @@ pub(crate) fn get_overlay_shortcut_status(
     })
 }
 
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub(crate) fn set_overlay_shortcut(
     shortcut: String,
@@ -148,6 +153,14 @@ pub(crate) fn resize_overlay_for_timers(
     let Some(window) = app.get_webview_window("overlay") else {
         return Ok(1);
     };
+    #[cfg(target_os = "linux")]
+    let max_width = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| (monitor.size().width as f64 / monitor.scale_factor() - 48.0).max(360.0))
+        .unwrap_or(960.0);
+    #[cfg(not(target_os = "linux"))]
     let max_width = window
         .current_monitor()
         .ok()
@@ -169,6 +182,20 @@ pub(crate) fn resize_overlay_for_timers(
         .map(|m| m.size().height as f64 / m.scale_factor() - 48.0)
         .unwrap_or(1000.0);
     let (width, height) = overlay_timer_window_size(timer_count, max_width, available_height);
+    // Wayland leaves placement to the compositor. Shrinking can move a floating
+    // window, so retain its size as timer cards disappear.
+    #[cfg(target_os = "linux")]
+    let (width, height) = {
+        let scale = window
+            .scale_factor()
+            .map_err(|_| AppError::invalid_state())?;
+        let current = window.inner_size().map_err(|_| AppError::invalid_state())?;
+        let current = current.to_logical::<f64>(scale);
+        if width <= current.width && height <= current.height {
+            return Ok(overlay_timer_rows(available_height));
+        }
+        (width.max(current.width), height.max(current.height))
+    };
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|_| AppError::storage())?;

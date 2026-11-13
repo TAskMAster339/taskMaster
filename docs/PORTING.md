@@ -6,11 +6,12 @@
 
 | Платформа | Состояние проекта |
 | --- | --- |
-| Windows x64 | Текущая целевая платформа; Windows CI и выпуск `.exe`/MSI |
-| Linux | Экспериментальная сборка из исходников; нативный запуск и интеграции не подтверждены CI |
+| Windows x64 | Windows CI и выпуск `.exe`/MSI |
+| Fedora 45 x86-64 | RPM собран и установлен в контейнере Fedora. Запуск бинарника проверен в Plasma Wayland и вложенном Niri 26.04. Полная проверка интеграций требуется перед публикацией |
+| Другие Linux | Экспериментальная сборка из исходников |
 | macOS | Экспериментальная сборка из исходников; нативный запуск, подпись и упаковка не подтверждены CI |
 
-Наличие кроссплатформенных Tauri и Rust не подтверждает готовность taskMaster на другой ОС. Ниже — инструкции подготовки и проверки переноса, а не обещание полной поддержки. Они сверены с текущим кодом и официальной документацией Tauri 3 ноября 2026 года; на Linux/macOS в рамках этой документационной итерации не выполнялись.
+Нативную проверку выполняйте в каждой целевой сессии по сценарию ниже.
 
 ## Общая подготовка
 
@@ -20,11 +21,47 @@
 
 ### Linux
 
+Для Fedora 45 установите сборочные зависимости:
+
+```bash
+sudo dnf install gcc gcc-c++ make curl wget file pkgconf-pkg-config \
+  webkit2gtk4.1-devel gtk3-devel openssl-devel libappindicator-gtk3-devel \
+  librsvg2-devel libxdo-devel dbus-devel rpm-build
+```
+
+Для установки готового RPM из Assets релиза выполните `sudo dnf install ./taskMaster-fedora-x86_64.rpm` и откройте taskMaster из меню приложений. Для фоновой работы используйте «Настройки → Трей → Свернуть в трей». Трей должен быть доступен в Plasma или в Waybar. Повторный запуск из меню показывает основное окно. Закрытие основного окна скрывает его при доступном трее. Для полного выхода используйте меню трея. При недоступном трее закрытие окна завершает приложение.
+
+#### Niri и Plasma Wayland
+
+Показать или скрыть оверлей можно из приложения, меню трея или командой `taskmaster --toggle-overlay`. При первом запуске с этим аргументом откроются оба окна. В Plasma назначьте пользовательское сочетание на эту команду через системные настройки клавиатуры. В Niri добавьте сочетание в существующий блок `binds` и правило для окна:
+
+```kdl
+// Внутри binds
+Ctrl+Alt+Space { spawn "taskmaster" "--toggle-overlay"; }
+
+// На верхнем уровне
+window-rule {
+    match app-id="^taskmaster$" title="^taskMaster Overlay$"
+    open-floating true
+}
+```
+
+Через `niri msg pick-window` можно проверить, что установленный оверлей соответствует правилу. В локальной сборке на Niri 26.04 команда `niri msg windows` показала app-id `taskmaster`, заголовок `taskMaster Overlay` и плавающее состояние. Проверьте конфиг командой `niri validate`. В Wayland taskMaster передаёт размещение композитору. Для уведомлений в Niri запустите службу, реализующую `org.freedesktop.Notifications`. [Правила окон Niri](https://niri-wm.github.io/niri/Configuration%3A-Window-Rules.html)
+
+В Plasma Wayland для удержания оверлея поверх обычных окон откройте **Параметры системы → Управление окнами → Правила окон**:
+
+1. Откройте оверлей. Добавьте правило, нажмите «Определить свойства окна» и щёлкните по оверлею.
+2. Оставьте определённый класс приложения и задайте точное совпадение заголовка `taskMaster Overlay`. Так правило будет действовать только на оверлей.
+3. Добавьте свойство «Поверх других окон» (Keep above), выберите «Принудительно» (Force) и установите «Да». Примените правило и снова откройте оверлей.
+
+Кнопка закрепления внутри оверлея блокирует перетаскивание и перестановку таймеров. Порядок окон определяет KWin. [Правила окон KWin](https://docs.kde.org/stable_kf6/en/kwin/kcontrol/windowspecific/window-matching0.html)
+
+
 Для Ubuntu/Debian с WebKitGTK 4.1 подготовьте системные зависимости:
 
 ```bash
 sudo apt update
-sudo apt install build-essential curl wget file pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install build-essential curl wget file pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
 ```
 
 Для других дистрибутивов названия пакетов отличаются; используйте [официальные prerequisites Tauri](https://v2.tauri.app/start/prerequisites/#linux). Не подменяйте WebKitGTK 4.1 пакетами 4.0 при ошибке поиска библиотеки. Версию дистрибутива и системных библиотек включайте в отчёт о переносе.
@@ -55,32 +92,13 @@ npm run tauri -- dev
 
 PowerShell-скрипт `Start-TaskMaster.ps1` рассчитан на Windows и `.exe`; на Linux/macOS используйте npm/Tauri CLI напрямую. `tauri dev` сам запускает Vite через `beforeDevCommand`. `npm run build` собирает только frontend; успешный результат не проверяет Rust или WebView целевой ОС.
 
-Сохраните первый реальный сбой и найдите его источник по таблице ниже. Не удаляйте Windows-ветки, проверки целостности или восстановление базы ради прохождения компиляции. Без графической сессии можно проверять часть сборки/тестов, но не tray, окна и системные уведомления. Если Tauri завершится из-за tray, изучите инициализацию в `app/bootstrap.rs` и `platform/tray.rs`: сейчас её ошибка может прервать запуск целиком.
-
-## Места для адаптации
-
-Это карта существующего кода и работы для порта. Предлагаемые адаптеры ещё не реализованы.
-
-| Область и исходник | Текущее ограничение | Что сделать и проверить при переносе |
-| --- | --- | --- |
-| [platform/desktop.rs](../src-tauri/src/platform/desktop.rs): `open_about_link` | Windows `ShellExecuteW`, на других ОС ошибка | Открытие только разрешённых HTTPS-ссылок через подходящий системный механизм; сохранить allowlist |
-| [commands/storage.rs](../src-tauri/src/commands/storage.rs): `open_data_directory` | `explorer.exe`, вне Windows явная ошибка | Открытие фактической папки данных через Finder/файловый менеджер, пути с пробелами и Unicode |
-| [platform/notifications.rs](../src-tauri/src/platform/notifications.rs) | WinRT-статус и `ms-settings:notifications`; вне Windows статус unknown, открытие настроек возвращает ошибку | Нативная проверка/представление разрешений, честные состояния UI, доставка и обработка клика; путь отправки через Tauri-плагин уже существует |
-| [platform/desktop.rs](../src-tauri/src/platform/desktop.rs), [platform/reset.rs](../src-tauri/src/platform/reset.rs) | Windows registry-часть автозапуска защищена `cfg`, плагин используется и вне Windows | Проверить регистрацию, повторный запуск и отключение при полном сбросе на каждой ОС, исправить Windows-specific сообщения |
-| [platform/tray.rs](../src-tauri/src/platform/tray.rs), [app/lifecycle.rs](../src-tauri/src/app/lifecycle.rs) | Закрытие основного окна скрывает его; интерфейс возврата зависит от трея | Проверить возврат к окну, явный выход, single-instance и поведение без доступного трея |
-| [platform/windows.rs](../src-tauri/src/platform/windows.rs) | Общие Tauri-окна, topmost и размещение проверялись для Windows | Несколько мониторов, DPI, рабочие области, закрепление, таймеры и полноэкранный режим; на Linux отдельно X11/Wayland |
-| [lib.rs](../src-tauri/src/lib.rs), [commands/overlay.rs](../src-tauri/src/commands/overlay.rs) | Глобальная клавиша через plugin, `Ctrl+Alt+Space` по умолчанию | Регистрация и конфликт с системными shortcuts; не обещать одинаковую работу во всех desktop environments |
-| [tauri.conf.json](../src-tauri/tauri.conf.json), [capabilities](../src-tauri/capabilities) | Общая конфигурация, разрешения двух окон, Windows release workflow | При необходимости платформенные overrides и минимальные разрешения; отдельная упаковка и CI целевой ОС |
-
-Платформенные ветки держите в Rust `platform/` с явными `cfg`, сохраняя небольшие команды и существующие DTO. Сначала проверьте API закреплённых версий плагинов в Cargo.lock и их актуальную [официальную документацию](https://v2.tauri.app/plugin/). Общие доменные правила не должны получать условные Windows/Linux/macOS варианты только из-за замены механизма уведомления.
-
-Трей имеет [платформенные ограничения](https://v2.tauri.app/learn/system-tray/), в частности Linux не поддерживает tray click events так же, как Windows. Для глобальных сочетаний проверяйте [документацию плагина](https://v2.tauri.app/plugin/global-shortcut/) и поведение в выбранной сессии. UI не должен сообщать об успехе неподдерживаемой команды; решите в конкретном PR, будет действие адаптировано или показано как недоступное.
+При проблемах запуска проверьте `npm run tauri -- info` и вывод терминала. Проверку окон, трея и уведомлений проводите в графической сессии. Ошибки инициализации трея и открытия оверлея на Fedora записываются в локальную диагностику.
 
 ## Данные и проверки
 
 Пути получаются через Tauri, а не через Windows-переменные окружения. Подробное разделение SQLite, JSON и WebView-настроек описано в [архитектуре](ARCHITECTURE.md#хранилище-и-совместимость). На новой платформе проверьте создание и повторное открытие базы, миграции, Unicode в путях, копирование/восстановление и сохранение настроек.
 
-Для экспериментов используйте одноразовый профиль ОС. Отдельный identifier через [CLI `--config`](https://v2.tauri.app/reference/cli/#dev) позволяет отделить пути Tauri: создайте вне репозитория JSON вида `{"identifier":"ru.taskmaster.porttest"}` и передайте его абсолютный путь через `npm run tauri -- dev --config /absolute/path/porttest.json`. Это не полная изоляция системных регистраций: Windows-автозапуск использует фиксированное имя `taskMaster`. Не проверяйте полный сброс и автозапуск в рабочем профиле.
+Для экспериментов используйте одноразовый профиль ОС. Отдельный identifier через [CLI `--config`](https://v2.tauri.app/reference/cli/#dev) позволяет отделить пути Tauri: создайте вне репозитория JSON вида `{"identifier":"ru.taskmaster.porttest"}` и передайте его абсолютный путь через `npm run tauri -- dev --config /absolute/path/porttest.json`. Для проверок системных регистраций нужен отдельный профиль ОС. Автозапуск использует фиксированное имя `taskMaster` в Windows и Linux. Не проверяйте полный сброс и автозапуск в рабочем профиле.
 
 После успешной компиляции и запуска пройдите:
 
@@ -98,6 +116,7 @@ PowerShell-скрипт `Start-TaskMaster.ps1` рассчитан на Windows �
 
 | ОС | Пример команды | Каталог результата при стандартном Cargo target dir |
 | --- | --- | --- |
+| Fedora 45, RPM | `npm run tauri -- build --bundles rpm` | `src-tauri/target/release/bundle/rpm/` |
 | Linux, Debian-пакет | `npm run tauri -- build --bundles deb` | `src-tauri/target/release/bundle/deb/` |
 | Linux, AppImage | `npm run tauri -- build --bundles appimage` | `src-tauri/target/release/bundle/appimage/` |
 | macOS, приложение | `npm run tauri -- build --bundles app` | `src-tauri/target/release/bundle/macos/` |
@@ -105,4 +124,4 @@ PowerShell-скрипт `Start-TaskMaster.ps1` рассчитан на Windows �
 
 При явном `--target` или `CARGO_TARGET_DIR` путь отличается. Учитывайте [зависимости Debian](https://v2.tauri.app/distribute/debian/), [совместимость AppImage](https://v2.tauri.app/distribute/appimage/) и [настройки macOS bundle](https://v2.tauri.app/distribute/macos-application-bundle/). Для публичного распространения macOS отдельно настройте [подпись и notarization](https://v2.tauri.app/distribute/sign/macos/); локальный запуск не подтверждает готовность распространяемого пакета.
 
-Текущие `.github/workflows/ci.yml` и `release.yml` рассчитаны на Windows. Добавление Linux/macOS runner, системных зависимостей, упаковки и публикации — часть отдельного PR о поддержке платформы. Этот документ сам по себе не меняет релизы. В таком PR укажите ОС/архитектуру, desktop session для Linux, версии toolchain, точные команды и результаты, проверенные интеграции и оставшиеся ограничения; затем обновите таблицу статуса в начале страницы.
+CI проверяет Windows и Fedora 45. Workflow публикации собирает Windows `.exe` и MSI и Fedora RPM, затем публикует их вместе. Перед ручным выпуском установите RPM в чистом профиле, проверьте запуск из меню, обновление пакета с сохранением данных и перечисленные выше сценарии в обеих сессиях. После публикации скачайте RPM из `latest` и повторите установку и запуск.

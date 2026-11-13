@@ -50,7 +50,11 @@ fn status_for_setting(setting: Option<i32>, uses_system_identity: bool) -> Notif
         ),
         _ => (
             Permission::Unknown,
-            "Не удалось определить состояние уведомлений Windows.",
+            if cfg!(windows) {
+                "Не удалось определить состояние уведомлений Windows."
+            } else {
+                "Состояние разрешений на уведомления неизвестно."
+            },
             true,
         ),
     };
@@ -102,13 +106,34 @@ fn query_status(app: &tauri::AppHandle) -> NotificationStatus {
 pub fn delivery_error() -> crate::app::error::AppError {
     crate::app::error::AppError {
         code: "notification_error",
-        message:
+        message: if cfg!(windows) {
             "Не удалось отправить уведомление. Проверьте Параметры Windows → Система → Уведомления."
-                .into(),
+        } else {
+            "Не удалось отправить уведомление."
+        }
+        .into(),
     }
 }
 
 pub fn ensure_available(app: &tauri::AppHandle) -> Result<(), crate::app::error::AppError> {
+    #[cfg(target_os = "linux")]
+    {
+        use zbus::{blocking::fdo::DBusProxy, names::BusName};
+        let service = BusName::try_from("org.freedesktop.Notifications").expect("valid D-Bus name");
+        let connection = zbus::blocking::Connection::session().map_err(|_| delivery_error())?;
+        let bus = DBusProxy::new(&connection).map_err(|_| delivery_error())?;
+        if !bus
+            .name_has_owner(service.clone())
+            .map_err(|_| delivery_error())?
+            && !bus
+                .list_activatable_names()
+                .map_err(|_| delivery_error())?
+                .iter()
+                .any(|name| name.as_str() == service.as_str())
+        {
+            return Err(delivery_error());
+        }
+    }
     let status = query_status(app);
     if status.can_test {
         Ok(())

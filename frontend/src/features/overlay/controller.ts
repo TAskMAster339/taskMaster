@@ -214,7 +214,7 @@ export async function renderOverlay(): Promise<void> {
             const restoreFocus = effects.preserveTimerFocus(overlayRoot);
             const staged = document.createElement("div");
             staged.innerHTML = `<section class="overlay-card" aria-label="${t("Следующая задача")}">
-        <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>${t("СЛЕДУЮЩАЯ ЗАДАЧА")}</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? t("Снять закрепление и разрешить перемещение") : t("Закрепить положение поверх окон")}" title="${pinned ? t("Открепить") : t("Закрепить положение и поверх окон")}">${pinned ? "◆" : "◇"}</button></header>
+        <header class="overlay-header ${pinned ? "is-pinned" : ""}"><span>${t("СЛЕДУЮЩАЯ ЗАДАЧА")}</span><button type="button" class="overlay-pin ${pinned ? "is-pinned" : ""}" data-overlay-pin aria-label="${pinned ? t("Снять закрепление и разрешить перемещение") : t(settingsState.usesLinuxDesktop ? "Закрепить положение оверлея" : "Закрепить положение поверх окон")}" title="${pinned ? t("Открепить") : t(settingsState.usesLinuxDesktop ? "Закрепить положение оверлея" : "Закрепить положение и поверх окон")}">${pinned ? "◆" : "◇"}</button></header>
         ${task ? `<div class="overlay-task"><strong>${escapeHtml(task.title)}</strong></div>
           <footer class="overlay-actions"><button type="button" data-overlay-complete="${task.id}">${t("Выполнено")}</button><button type="button" data-overlay-open>${t("Открыть список")}</button></footer>`
                 : `<div class="overlay-empty"><strong>${t("На сегодня всё")}</strong><button type="button" data-overlay-open>${t("Добавить задачу")}</button></div>`}

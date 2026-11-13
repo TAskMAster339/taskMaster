@@ -1,5 +1,6 @@
 use crate::app::error::AppError;
 use crate::app::state::{AppState, BackupState, OverlayState, with_store};
+#[cfg(not(target_os = "linux"))]
 use crate::domain::shortcuts;
 use crate::persistence::backups as storage;
 use crate::persistence::store::TaskStore;
@@ -140,15 +141,19 @@ pub(crate) async fn confirm_database_restore(
                 *backup.warning.lock().map_err(|_|AppError::lock())?=Some("Данные восстановлены, но напоминания не удалось проверить. Перезапустите приложение.".into());
             }
         }
-        let restored_keys=guard.as_ref().map_err(Clone::clone)?.shortcuts()?;
+        #[cfg(not(target_os = "linux"))]
+        let restored_keys = guard.as_ref().map_err(Clone::clone)?.shortcuts()?;
         drop(guard);
-        let overlay=app.state::<OverlayState>();
-        let global=overlay.settings.lock().map_err(|_|AppError::lock())?.shortcut.clone();
-        if shortcuts::validate(&restored_keys,&global).is_err() {
-            use tauri_plugin_global_shortcut::GlobalShortcutExt;
-            let _=app.global_shortcut().unregister(global.as_str());
-            *overlay.shortcut_available.lock().map_err(|_|AppError::lock())?=false;
-            *backup.warning.lock().map_err(|_|AppError::lock())?=Some("Горячая клавиша оверлея конфликтует с восстановленными сочетаниями. Измените её в настройках.".into());
+        #[cfg(not(target_os = "linux"))]
+        {
+            let overlay = app.state::<OverlayState>();
+            let global = overlay.settings.lock().map_err(|_| AppError::lock())?.shortcut.clone();
+            if shortcuts::validate(&restored_keys, &global).is_err() {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                let _ = app.global_shortcut().unregister(global.as_str());
+                *overlay.shortcut_available.lock().map_err(|_| AppError::lock())? = false;
+                *backup.warning.lock().map_err(|_| AppError::lock())? = Some("Горячая клавиша оверлея конфликтует с восстановленными сочетаниями. Измените её в настройках.".into());
+            }
         }
         let _=app.emit("database-restored",());
         Ok(safety.to_string_lossy().into_owned())
@@ -156,21 +161,13 @@ pub(crate) async fn confirm_database_restore(
 }
 
 #[tauri::command]
-pub(crate) fn open_data_directory(app: AppHandle) -> Result<(), AppError> {
+pub(crate) async fn open_data_directory(app: AppHandle) -> Result<(), AppError> {
     let directory = app.state::<BackupState>().directory.clone();
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer.exe")
-            .arg(directory)
-            .spawn()
-            .map_err(|_| storage::error("Не удалось открыть папку данных."))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = directory;
-        Err(storage::error("Открытие папки поддерживается в Windows."))
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::platform::desktop::open_data_directory(&directory)
+    })
+    .await
+    .map_err(|_| storage::error("Не удалось открыть папку данных."))?
 }
 
 #[tauri::command]

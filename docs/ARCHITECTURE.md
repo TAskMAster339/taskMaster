@@ -47,6 +47,8 @@ DOM → feature/controller.ts → shared/tauri.ts → commands/*
 - Подписки основного окна находятся в `app/bootstrap.ts`, оверлея — в `features/overlay/controller.ts`. Например, `tasks-changed` вызывает обновление задач, `database-restored` — перезагрузку WebView. При добавлении события проследите отправителя, все подписки и обработку ошибок; существующие имена не являются схемой для произвольных новых payload.
 - Разрешения WebView описаны в [capabilities/default.json](../src-tauri/capabilities/default.json), CSP — в [tauri.conf.json](../src-tauri/tauri.conf.json). Вызов Rust-плагина из backend сам по себе не требует выдавать его JS API в WebView. Для нового Tauri API проверяйте официальные разрешения и поддержку ОС.
 
+На Fedora `uses_linux_desktop` выбирает элементы настроек, `hide_to_tray` проверяет наличие иконки и хоста трея через D-Bus. Аргумент `--toggle-overlay` обрабатывается при запуске и передаётся текущему процессу через single-instance.
+
 ## Хранилище и совместимость
 
 `AppState` содержит `Mutex<Result<TaskStore, AppError>>`. `with_store` получает блокировку и возвращает ошибку недоступного хранилища. Ошибка открытия базы сохраняется как состояние для восстановления; нельзя заменять её успешным пустым `TaskStore`. Длительные файловые операции выполняются через `spawn_blocking` там, где это уже предусмотрено командами хранения.

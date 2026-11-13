@@ -5,7 +5,7 @@ use tauri_plugin_autostart::ManagerExt;
 fn autostart_error() -> AppError {
     AppError {
         code: "autostart_error",
-        message: "Не удалось проверить или изменить автозапуск Windows. Повторите попытку.".into(),
+        message: "Не удалось проверить или изменить автозапуск. Повторите попытку.".into(),
     }
 }
 
@@ -70,10 +70,10 @@ fn startup_command(executable: &std::path::Path) -> String {
 #[path = "../tests/desktop_tests.rs"]
 mod tests;
 
-fn link_error() -> AppError {
+pub(crate) fn link_error() -> AppError {
     AppError {
         code: "link_error",
-        message: "Не удалось открыть ссылку в браузере Windows.".into(),
+        message: "Не удалось открыть ссылку в браузере.".into(),
     }
 }
 
@@ -116,7 +116,11 @@ pub fn open_about_link(url: String) -> Result<(), AppError> {
             Err(link_error())
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        open_with_desktop(url).map_err(|_| link_error())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Err(link_error())
     }
@@ -125,3 +129,34 @@ pub fn open_about_link(url: String) -> Result<(), AppError> {
 #[cfg(test)]
 #[path = "../tests/desktop_about_tests.rs"]
 mod about_tests;
+
+#[cfg(target_os = "linux")]
+fn open_with_desktop(value: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
+    let status = std::process::Command::new("xdg-open").arg(value).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("xdg-open failed"))
+    }
+}
+
+pub(crate) fn open_data_directory(directory: &std::path::Path) -> Result<(), AppError> {
+    let error = || crate::persistence::backups::error("Не удалось открыть папку данных.");
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(directory)
+            .spawn()
+            .map_err(|_| error())?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        open_with_desktop(directory).map_err(|_| error())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = directory;
+        Err(error())
+    }
+}

@@ -23,14 +23,22 @@ pub(crate) fn update_shortcut(
     overlay: State<'_, OverlayState>,
     app: AppHandle,
 ) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+    #[cfg(not(target_os = "linux"))]
     let global = overlay
         .settings
         .lock()
         .map_err(|_| AppError::lock())?
         .shortcut
         .clone();
+    #[cfg(target_os = "linux")]
+    let global = {
+        let _ = overlay;
+        ""
+    };
+    #[cfg(not(target_os = "linux"))]
+    let global = global.as_str();
     let result = with_store(&state, |store| {
-        store.set_shortcut(&action, &combination, &global)
+        store.set_shortcut(&action, &combination, global)
     })?;
     let _ = app.emit("shortcuts-changed", &result);
     Ok(result)

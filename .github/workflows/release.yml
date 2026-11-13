@@ -4,16 +4,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: taskmaster-release
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish Windows installers
+  windows:
+    name: Build Windows executable and installer
     runs-on: windows-latest
     steps:
       - name: Check out repository
@@ -54,6 +53,95 @@ jobs:
           npm run build
           if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
 
+      - name: Build Windows executable and MSI installer
+        run: npm run tauri -- build --bundles msi
+
+      - name: Stage Windows assets
+        shell: pwsh
+        run: |
+          $msi = @(Get-ChildItem 'src-tauri/target/release/bundle/msi' -Filter '*.msi')
+          if ($msi.Count -ne 1) { throw "Expected exactly one MSI installer." }
+          New-Item -ItemType Directory release-assets
+          Copy-Item 'src-tauri/target/release/taskmaster.exe' 'release-assets/taskMaster-windows-x64.exe'
+          Copy-Item $msi[0].FullName 'release-assets/taskMaster-windows-x64.msi'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: release-assets/
+          if-no-files-found: error
+          overwrite: true
+
+  fedora:
+    name: Build Fedora 45 RPM
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install Fedora build dependencies
+        run: >
+          dnf install -y git gcc gcc-c++ make curl wget file pkgconf-pkg-config
+          webkit2gtk4.1-devel gtk3-devel openssl-devel libappindicator-gtk3-devel
+          librsvg2-devel libxdo-devel dbus-devel rpm-build
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: npm ci
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: npm test
+      - run: npm run build
+      - name: Build and inspect x86-64 RPM
+        run: |
+          npm run tauri -- build --bundles rpm -- --locked
+          shopt -s nullglob
+          packages=(src-tauri/target/release/bundle/rpm/*.rpm)
+          [[ ${#packages[@]} == 1 ]]
+          rpm -qp --queryformat '%{ARCH}\n' "${packages[0]}" | grep -x x86_64
+          requirements=$(rpm -qpR "${packages[0]}")
+          printf '%s\n' "$requirements"
+          for dependency in webkit2gtk4.1 gtk3 libappindicator-gtk3 dbus-libs xdg-utils; do
+            grep -Fx "$dependency" <<< "$requirements"
+          done
+          listing=$(rpm -qpl "${packages[0]}")
+          grep -Fx /usr/bin/taskmaster <<< "$listing"
+          grep -E '^/usr/share/applications/.+\.desktop$' <<< "$listing"
+          mkdir release-assets
+          cp "${packages[0]}" release-assets/taskMaster-fedora-x86_64.rpm
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fedora-x86_64
+          path: release-assets/
+          if-no-files-found: error
+          overwrite: true
+
+  release:
+    name: Publish Windows and Fedora assets
+    needs: [windows, fedora]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-x64
+          path: release-assets
+      - uses: actions/download-artifact@v8
+        with:
+          name: fedora-x86_64
+          path: release-assets
       - name: Require previous changelog archive to be merged
         shell: pwsh
         env:
@@ -64,12 +152,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Could not check previous changelog archive pull requests." }
           if ($pending) { throw "Merge the previous changelog archive pull request before publishing another release: $pending" }
 
-      - name: Build Windows executable and MSI installer
-        run: npm run tauri -- build --bundles msi
-
       - name: Prepare release notes and metadata
         id: release
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if ($env:GITHUB_REF_NAME -ne "${{ github.event.repository.default_branch }}") {
             throw "Publish Release must be run from the repository default branch."
@@ -88,7 +175,9 @@ jobs:
           $notes = $unreleased.Groups['body'].Value.Trim()
           if (-not ($notes -match '(?m)^- ')) { throw "CHANGELOG.md Unreleased section has no entries." }
 
-          $date = (Get-Date).ToUniversalTime().ToString('yyyy.MM.dd')
+          $createdAt = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" --jq '.created_at'
+          if ($LASTEXITCODE -ne 0 -or -not $createdAt) { throw "Could not read the original workflow run date." }
+          $date = ([datetimeoffset]::Parse($createdAt)).UtcDateTime.ToString('yyyy.MM.dd')
           $run = $env:GITHUB_RUN_NUMBER
           $tag = "v$($cargoVersion)-$date-$run"
           $notesPath = Join-Path $env:RUNNER_TEMP 'taskmaster-release-notes.md'
@@ -108,23 +197,23 @@ jobs:
           RELEASE_DATE: ${{ steps.release.outputs.date }}
           RELEASE_NOTES: ${{ steps.release.outputs.notes_path }}
         run: |
-          $binary = Resolve-Path 'src-tauri/target/release/taskmaster.exe'
-          $msi = Get-ChildItem 'src-tauri/target/release/bundle/msi' -Filter '*.msi' | Select-Object -First 1
-          if (-not $msi) { throw "MSI installer was not produced." }
+          $ErrorActionPreference = 'Stop'
           $datedBinary = Join-Path $env:RUNNER_TEMP "taskMaster-$env:RELEASE_VERSION-windows-x64.exe"
           $datedMsi = Join-Path $env:RUNNER_TEMP "taskMaster-$env:RELEASE_VERSION-windows-x64.msi"
-          Copy-Item -LiteralPath $binary -Destination $datedBinary
-          Copy-Item -LiteralPath $msi.FullName -Destination $datedMsi
+          $datedRpm = Join-Path $env:RUNNER_TEMP "taskMaster-$env:RELEASE_VERSION-fedora-x86_64.rpm"
+          Copy-Item 'release-assets/taskMaster-windows-x64.exe' $datedBinary
+          Copy-Item 'release-assets/taskMaster-windows-x64.msi' $datedMsi
+          Copy-Item 'release-assets/taskMaster-fedora-x86_64.rpm' $datedRpm
           $title = "taskMaster $env:RELEASE_VERSION ($env:RELEASE_DATE)"
 
           $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
           if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
           if ($releaseTags -contains $env:RELEASE_TAG) {
-            gh release upload $env:RELEASE_TAG $datedBinary $datedMsi --clobber
+            gh release upload $env:RELEASE_TAG $datedBinary $datedMsi $datedRpm --clobber
             if ($LASTEXITCODE -ne 0) { throw "Could not update dated release asset." }
             gh release edit $env:RELEASE_TAG --title $title --notes-file $env:RELEASE_NOTES --latest=false
           } else {
-            gh release create $env:RELEASE_TAG $datedBinary $datedMsi --title $title --notes-file $env:RELEASE_NOTES --latest=false
+            gh release create $env:RELEASE_TAG $datedBinary $datedMsi $datedRpm --title $title --notes-file $env:RELEASE_NOTES --latest=false
           }
           if ($LASTEXITCODE -ne 0) { throw "Could not publish dated version release." }
 
@@ -136,13 +225,9 @@ jobs:
           RELEASE_DATE: ${{ steps.release.outputs.date }}
           RELEASE_NOTES: ${{ steps.release.outputs.notes_path }}
         run: |
-          $binary = Resolve-Path 'src-tauri/target/release/taskmaster.exe'
-          $msi = Get-ChildItem 'src-tauri/target/release/bundle/msi' -Filter '*.msi' | Select-Object -First 1
-          if (-not $msi) { throw "MSI installer was not produced." }
-          $latestBinary = Join-Path $env:RUNNER_TEMP 'taskMaster-windows-x64.exe'
-          $latestMsi = Join-Path $env:RUNNER_TEMP 'taskMaster-windows-x64.msi'
-          Copy-Item -LiteralPath $binary -Destination $latestBinary
-          Copy-Item -LiteralPath $msi.FullName -Destination $latestMsi
+          $latestBinary = Resolve-Path 'release-assets/taskMaster-windows-x64.exe'
+          $latestMsi = Resolve-Path 'release-assets/taskMaster-windows-x64.msi'
+          $latestRpm = Resolve-Path 'release-assets/taskMaster-fedora-x86_64.rpm'
           $title = "taskMaster latest — $env:RELEASE_VERSION ($env:RELEASE_DATE)"
 
           $latestRef = "$($env:GITHUB_SHA):refs/tags/latest"
@@ -152,11 +237,11 @@ jobs:
           $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
           if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
           if ($releaseTags -contains 'latest') {
-            gh release upload latest $latestBinary $latestMsi --clobber
-            if ($LASTEXITCODE -ne 0) { throw "Could not upload executable to the latest release." }
+            gh release upload latest $latestBinary $latestMsi $latestRpm --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not upload assets to the latest release." }
             gh release edit latest --title $title --notes-file $env:RELEASE_NOTES --latest
           } else {
-            gh release create latest $latestBinary $latestMsi --title $title --notes-file $env:RELEASE_NOTES --latest
+            gh release create latest $latestBinary $latestMsi $latestRpm --title $title --notes-file $env:RELEASE_NOTES --latest
           }
           if ($LASTEXITCODE -ne 0) { throw "Could not update the latest release." }
 

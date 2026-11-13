@@ -83,10 +83,10 @@ test('contrast, forced colors, responsive language layouts and 200 percent zoom'
   for (const lang of ['ja', 'ru', 'en']) {
    await page.locator('[data-language-select]').selectOption(lang);
    await page.setViewportSize({ width: 360, height: 480 });
-   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth));
+   await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth);
    await page.setViewportSize({ width: 920, height: 700 });
    await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
-   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth));
+   await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth);
    await page.evaluate(() => { document.documentElement.style.zoom = ''; });
   }
   await page.emulateMedia({ forcedColors: 'active' });
@@ -304,5 +304,42 @@ test('capture stable visual reference', { skip: !process.env.TASKMASTER_VISUAL_D
     await page.screenshot({ path: `${directory}/${theme}-${view}.png`, animations: 'disabled' });
    }
   }
+ } finally { await context.close(); }
+});
+
+test('Linux exposes desktop integration controls and reports an unavailable tray', async () => {
+ const { context, page, errors } = await fixture();
+ try {
+  await page.goto(`${base}/tests/fixtures/feature-check.html?linux`);
+  await page.waitForFunction(() => window.featureFixture?.ready);
+  await page.locator('[data-view="settings"]').click();
+  await page.locator('[data-language-select]').selectOption('en');
+  await page.getByText('Start at sign-in').waitFor();
+  assert.equal(await page.locator('[data-open-notification-settings]').count(), 0);
+  assert.equal(await page.locator('[data-shortcut-form="overlay"]').count(), 0);
+  assert.equal(await page.locator('code.overlay-shortcut-command').textContent(), 'taskmaster --toggle-overlay');
+  const hide = page.getByRole('button', { name: 'Minimize to tray' });
+  await hide.click();
+  await page.getByText('Could not minimize to the system tray.').waitFor();
+  await page.evaluate(() => window.featureFixture.setTrayAvailable(true));
+  await hide.click();
+  await page.waitForFunction(() => document.querySelector('[data-tray-status]').textContent === '');
+  assert.deepEqual(errors, []);
+ } finally { await context.close(); }
+});
+
+test('Linux overlay can lock and unlock its position', async () => {
+ const { context, page, errors } = await fixture();
+ try {
+  await page.goto(`${base}/tests/fixtures/feature-check.html?window=overlay&linux&running=1`);
+  const pin = page.locator('[data-overlay-pin]');
+  await pin.waitFor();
+  assert.equal(await pin.getAttribute('aria-label'), 'オーバーレイの位置を固定');
+  await pin.click();
+  await page.locator('[data-overlay-pin].is-pinned').waitFor();
+  await pin.click();
+  await page.locator('[data-overlay-pin]:not(.is-pinned)').waitFor();
+  assert.deepEqual(await page.evaluate(() => window.featureFixture.calls.filter(call => call.command === 'set_overlay_pinned').map(call => call.args.pinned)), [true, false]);
+  assert.deepEqual(errors, []);
  } finally { await context.close(); }
 });

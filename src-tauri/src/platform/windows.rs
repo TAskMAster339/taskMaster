@@ -1,8 +1,7 @@
 use crate::app::error::AppError;
+#[cfg(not(target_os = "linux"))]
 use crate::app::state::OverlayState;
-use tauri::{
-    AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 pub(crate) fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -22,6 +21,7 @@ pub(crate) fn toggle_main_window(app: &AppHandle) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn clamp_overlay_position(app: &AppHandle, x: i32, y: i32) -> (i32, i32) {
     let monitors = app.available_monitors().unwrap_or_default();
     for monitor in monitors {
@@ -63,6 +63,7 @@ pub(crate) fn clamp_overlay_position(app: &AppHandle, x: i32, y: i32) -> (i32, i
     (24, 24)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 #[expect(
     clippy::too_many_arguments,
     reason = "Monitor and window rectangles use explicit physical coordinates"
@@ -106,40 +107,65 @@ pub(crate) fn ensure_overlay_window(app: &AppHandle) -> Result<WebviewWindow, Ap
     if let Some(window) = app.get_webview_window("overlay") {
         return Ok(window);
     }
-    let settings_state = app.try_state::<OverlayState>().ok_or_else(AppError::lock)?;
-    let settings = settings_state
-        .settings
-        .lock()
-        .map_err(|_| AppError::lock())?
-        .clone();
-    let (x, y) = clamp_overlay_position(app, settings.x, settings.y);
-    let window =
+    let builder =
         WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("index.html?overlay".into()))
-            .title("Следующая задача")
             .inner_size(360.0, 154.0)
-            .position(24.0, 24.0)
             .decorations(false)
             .transparent(true)
             .shadow(false)
             .resizable(false)
             .focused(false)
-            .visible(false)
+            .visible(false);
+    #[cfg(target_os = "linux")]
+    let window = builder
+        .title("taskMaster Overlay")
+        .build()
+        .map_err(|_| overlay_error())?;
+    #[cfg(not(target_os = "linux"))]
+    let window = {
+        let state = app.try_state::<OverlayState>().ok_or_else(AppError::lock)?;
+        let settings = state.settings.lock().map_err(|_| AppError::lock())?;
+        let (x, y) = clamp_overlay_position(app, settings.x, settings.y);
+        let window = builder
+            .title("Следующая задача")
+            .position(24.0, 24.0)
             .always_on_top(settings.pinned)
             .build()
-            .map_err(|_| AppError::storage())?;
-    window
-        .set_position(PhysicalPosition::new(x, y))
-        .map_err(|_| AppError::storage())?;
+            .map_err(|_| overlay_error())?;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|_| overlay_error())?;
+        window
+    };
     Ok(window)
 }
 
 pub(crate) fn toggle_overlay(app: &AppHandle) -> Result<bool, AppError> {
     let window = ensure_overlay_window(app)?;
     if window.is_visible().unwrap_or(false) {
-        window.hide().map_err(|_| AppError::storage())?;
+        window.hide().map_err(|_| overlay_error())?;
         Ok(false)
     } else {
-        window.show().map_err(|_| AppError::storage())?;
+        window.show().map_err(|_| overlay_error())?;
         Ok(true)
+    }
+}
+
+fn overlay_error() -> AppError {
+    #[cfg(target_os = "linux")]
+    crate::platform::diagnostics::record(
+        crate::platform::diagnostics::Event::DesktopError,
+        Some("overlay_unavailable"),
+    );
+    AppError {
+        code: "overlay_unavailable",
+        message: "Не удалось открыть или скрыть оверлей.".into(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn toggle_overlay_from_desktop(app: &AppHandle) {
+    if toggle_overlay(app).is_err() {
+        show_main_window(app);
     }
 }

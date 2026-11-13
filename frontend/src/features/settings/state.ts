@@ -40,6 +40,7 @@ export const settingsState: {
     };
     shortcutsReady: boolean;
     shortcutsError: string;
+    usesLinuxDesktop: boolean;
     overlayShortcut: string;
     overlayShortcutAvailable: boolean;
     overlayShortcutDialogOpen: boolean;
@@ -68,6 +69,7 @@ export const settingsState: {
     shortcuts: { ...defaultShortcuts },
     shortcutsReady: false,
     shortcutsError: "",
+    usesLinuxDesktop: false,
     overlayShortcut: "Ctrl+Alt+Space",
     overlayShortcutAvailable: true,
     overlayShortcutDialogOpen: false,

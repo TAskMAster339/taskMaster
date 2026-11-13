@@ -2,6 +2,14 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { BackupStatus, ClearMode, DisplaySettings, HistoryDay, NotificationStatus, OverlayShortcutStatus, PermanentDeletionPreview, RestorePreview, Task, Theme, Timer, UndoDeletion } from "./types.ts";
 export { listen } from "@tauri-apps/api/event";
 interface Commands {
+    uses_linux_desktop: {
+        args: undefined;
+        result: boolean;
+    };
+    hide_to_tray: {
+        args: undefined;
+        result: void;
+    };
     cancel_database_restore: {
         args: undefined;
         result: void;

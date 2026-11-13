@@ -1,15 +1,20 @@
 use crate::app::error::AppError;
 use crate::app::lifecycle::register_window_events;
 use crate::app::runtime::{register_notification_actions, start_reminder_scheduler};
-use crate::app::state::{AppState, BackupState, OverlayState, PermanentDeletionState, with_store};
+#[cfg(not(target_os = "linux"))]
+use crate::app::state::with_store;
+use crate::app::state::{AppState, BackupState, OverlayState, PermanentDeletionState};
+#[cfg(not(target_os = "linux"))]
 use crate::domain::shortcuts;
 use crate::persistence::backups as storage;
 use crate::persistence::overlay::read_overlay_settings;
 use crate::persistence::store::TaskStore;
-use crate::platform::tray::{localized_tray_menu, setup_tray};
+use crate::platform::tray::setup_tray;
 use crate::platform::{diagnostics, presentation, reset};
 use std::{fs, path::PathBuf, sync::Mutex};
-use tauri::{Emitter, Manager, WebviewWindowBuilder};
+#[cfg(not(target_os = "linux"))]
+use tauri::Emitter;
+use tauri::{Manager, WebviewWindowBuilder};
 
 pub(crate) fn open_store(path: PathBuf) -> Result<TaskStore, AppError> {
     if storage::restore_marker(&path.join("taskmaster.sqlite3")).exists() {
@@ -90,29 +95,32 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
         shortcut_available: Mutex::new(false),
         path: settings_path,
     });
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-    let shortcut = app
-        .state::<OverlayState>()
-        .settings
-        .lock()
-        .map_err(|_| std::io::Error::other("overlay settings lock failed"))?
-        .shortcut
-        .clone();
-    let compatible = with_store(&app.state::<AppState>(), |store| {
-        shortcuts::validate(&store.shortcuts()?, &shortcut)
-    })
-    .is_ok();
-    let registered = compatible && app.global_shortcut().register(shortcut.as_str()).is_ok();
-    *app.state::<OverlayState>()
-        .shortcut_available
-        .lock()
-        .map_err(|_| std::io::Error::other("overlay shortcut state lock failed"))? = registered;
-    if !registered {
-        diagnostics::record(diagnostics::Event::ShortcutConflict, None);
-        let _ = app.emit(
-            "overlay-shortcut-error",
-            format!("Не удалось зарегистрировать {shortcut}."),
-        );
+    #[cfg(not(target_os = "linux"))]
+    {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        let shortcut = app
+            .state::<OverlayState>()
+            .settings
+            .lock()
+            .map_err(|_| std::io::Error::other("overlay settings lock failed"))?
+            .shortcut
+            .clone();
+        let compatible = with_store(&app.state::<AppState>(), |store| {
+            shortcuts::validate(&store.shortcuts()?, &shortcut)
+        })
+        .is_ok();
+        let registered = compatible && app.global_shortcut().register(shortcut.as_str()).is_ok();
+        *app.state::<OverlayState>()
+            .shortcut_available
+            .lock()
+            .map_err(|_| std::io::Error::other("overlay shortcut state lock failed"))? = registered;
+        if !registered {
+            diagnostics::record(diagnostics::Event::ShortcutConflict, None);
+            let _ = app.emit(
+                "overlay-shortcut-error",
+                format!("Не удалось зарегистрировать {shortcut}."),
+            );
+        }
     }
     let main_config = app
         .config()
@@ -125,10 +133,17 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
     start_reminder_scheduler(app.handle().clone());
     register_notification_actions(app.handle());
 
-    let _menu = localized_tray_menu(app.handle())?;
-
+    #[cfg(not(target_os = "linux"))]
     setup_tray(app)?;
+    #[cfg(target_os = "linux")]
+    if setup_tray(app).is_err() {
+        diagnostics::record(diagnostics::Event::DesktopError, Some("tray_unavailable"));
+    }
 
     register_window_events(app)?;
+    #[cfg(target_os = "linux")]
+    if crate::platform::linux_launch::toggle_requested(std::env::args_os()) {
+        crate::platform::windows::toggle_overlay_from_desktop(app.handle());
+    }
     Ok(())
 }
