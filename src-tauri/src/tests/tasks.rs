@@ -339,3 +339,41 @@ fn benchmark_queue_of_5000_tasks() {
     }
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn reopening_task_removes_cancelled_completion_from_history() {
+    let store = TaskStore::in_memory().unwrap();
+    let task = store.create_task("Вернуть в Сегодня").unwrap();
+    store.complete_task(&task.id).unwrap();
+    assert_eq!(
+        store
+            .list_history_for_range(0, i64::MAX)
+            .unwrap()
+            .completed
+            .len(),
+        1
+    );
+    store.reopen_task(&task.id).unwrap();
+    assert!(
+        store
+            .list_history_for_range(0, i64::MAX)
+            .unwrap()
+            .completed
+            .is_empty()
+    );
+    let events: i64 = store.connection.query_row(
+        "SELECT COUNT(*) FROM task_events WHERE task_id = ?1 AND kind IN ('completed', 'reopened')",
+        [&task.id],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(events, 2);
+    store.complete_task(&task.id).unwrap();
+    assert_eq!(
+        store
+            .list_history_for_range(0, i64::MAX)
+            .unwrap()
+            .completed
+            .len(),
+        1
+    );
+}

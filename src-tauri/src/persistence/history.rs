@@ -46,6 +46,11 @@ impl TaskStore {
                                   WHERE created.task_id = t.id AND created.kind = 'created'), t.created_at)
                  FROM task_events e JOIN tasks t ON t.id = e.task_id
                  WHERE e.kind = ?1 AND e.occurred_at >= ?2 AND e.occurred_at < ?3
+                   AND (e.kind <> 'completed' OR NOT EXISTS (
+                       SELECT 1 FROM task_events reopened
+                       WHERE reopened.task_id = e.task_id AND reopened.kind = 'reopened'
+                         AND reopened.rowid > e.rowid
+                   ))
                  GROUP BY t.id ORDER BY MAX(e.occurred_at) DESC, t.id",
             )
             .map_err(|_| AppError::storage())?;
