@@ -73,6 +73,7 @@ jobs:
 
   fedora:
     name: Build Fedora 45 RPM
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     container: registry.fedoraproject.org/fedora:45
     defaults:
@@ -83,7 +84,7 @@ jobs:
         run: >
           dnf install -y git gcc gcc-c++ make curl wget file pkgconf-pkg-config
           webkit2gtk4.1-devel gtk3-devel openssl-devel libappindicator-gtk3-devel
-          librsvg2-devel libxdo-devel dbus-devel rpm-build
+          librsvg2-devel libxdo-devel dbus-devel rpm-build rpm-sign gnupg2
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -115,6 +116,12 @@ jobs:
           grep -E '^/usr/share/applications/.+\.desktop$' <<< "$listing"
           mkdir release-assets
           cp "${packages[0]}" release-assets/taskMaster-fedora-x86_64.rpm
+      - name: Sign and verify Fedora RPM
+        env:
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+          RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
+          RPM_SIGNING_FINGERPRINT: ${{ vars.RPM_SIGNING_FINGERPRINT }}
+        run: bash scripts/sign-fedora-rpm.sh release-assets/taskMaster-fedora-x86_64.rpm release-assets/RPM-GPG-KEY-taskMaster.asc
       - uses: actions/upload-artifact@v7
         with:
           name: fedora-x86_64
@@ -204,16 +211,17 @@ jobs:
           Copy-Item 'release-assets/taskMaster-windows-x64.exe' $datedBinary
           Copy-Item 'release-assets/taskMaster-windows-x64.msi' $datedMsi
           Copy-Item 'release-assets/taskMaster-fedora-x86_64.rpm' $datedRpm
+          $rpmKey = Resolve-Path 'release-assets/RPM-GPG-KEY-taskMaster.asc'
           $title = "taskMaster $env:RELEASE_VERSION ($env:RELEASE_DATE)"
 
           $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
           if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
           if ($releaseTags -contains $env:RELEASE_TAG) {
-            gh release upload $env:RELEASE_TAG $datedBinary $datedMsi $datedRpm --clobber
+            gh release upload $env:RELEASE_TAG $datedBinary $datedMsi $datedRpm $rpmKey --clobber
             if ($LASTEXITCODE -ne 0) { throw "Could not update dated release asset." }
             gh release edit $env:RELEASE_TAG --title $title --notes-file $env:RELEASE_NOTES --latest=false
           } else {
-            gh release create $env:RELEASE_TAG $datedBinary $datedMsi $datedRpm --title $title --notes-file $env:RELEASE_NOTES --latest=false
+            gh release create $env:RELEASE_TAG $datedBinary $datedMsi $datedRpm $rpmKey --title $title --notes-file $env:RELEASE_NOTES --latest=false
           }
           if ($LASTEXITCODE -ne 0) { throw "Could not publish dated version release." }
 
@@ -228,6 +236,7 @@ jobs:
           $latestBinary = Resolve-Path 'release-assets/taskMaster-windows-x64.exe'
           $latestMsi = Resolve-Path 'release-assets/taskMaster-windows-x64.msi'
           $latestRpm = Resolve-Path 'release-assets/taskMaster-fedora-x86_64.rpm'
+          $rpmKey = Resolve-Path 'release-assets/RPM-GPG-KEY-taskMaster.asc'
           $title = "taskMaster latest — $env:RELEASE_VERSION ($env:RELEASE_DATE)"
 
           $latestRef = "$($env:GITHUB_SHA):refs/tags/latest"
@@ -237,11 +246,11 @@ jobs:
           $releaseTags = gh release list --limit 100 --json tagName --jq '.[].tagName'
           if ($LASTEXITCODE -ne 0) { throw "Could not list GitHub releases." }
           if ($releaseTags -contains 'latest') {
-            gh release upload latest $latestBinary $latestMsi $latestRpm --clobber
+            gh release upload latest $latestBinary $latestMsi $latestRpm $rpmKey --clobber
             if ($LASTEXITCODE -ne 0) { throw "Could not upload assets to the latest release." }
             gh release edit latest --title $title --notes-file $env:RELEASE_NOTES --latest
           } else {
-            gh release create latest $latestBinary $latestMsi $latestRpm --title $title --notes-file $env:RELEASE_NOTES --latest
+            gh release create latest $latestBinary $latestMsi $latestRpm $rpmKey --title $title --notes-file $env:RELEASE_NOTES --latest
           }
           if ($LASTEXITCODE -ne 0) { throw "Could not update the latest release." }
 

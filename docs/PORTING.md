@@ -31,6 +31,16 @@ sudo dnf install gcc gcc-c++ make curl wget file pkgconf-pkg-config \
 
 Для установки готового RPM из Assets релиза выполните `sudo dnf install ./taskMaster-fedora-x86_64.rpm` и откройте taskMaster из меню приложений. Для фоновой работы используйте «Настройки → Трей → Свернуть в трей». Трей должен быть доступен в Plasma или в Waybar. Повторный запуск из меню показывает основное окно. Закрытие основного окна скрывает его при доступном трее. Для полного выхода используйте меню трея. При недоступном трее закрытие окна завершает приложение.
 
+#### Проверка подписи RPM из GitHub Releases
+
+Скачайте RPM и `RPM-GPG-KEY-taskMaster.asc` из одного релиза. Проверьте полный отпечаток ключа через `gpg --show-keys --fingerprint RPM-GPG-KEY-taskMaster.asc` и сравните его с отпечатком, опубликованным сопровождающим по доверенному каналу. После совпадения выполните:
+
+```bash
+sudo rpm --import RPM-GPG-KEY-taskMaster.asc
+rpm --define '_pkgverify_level signature' --checksig taskMaster-fedora-x86_64.rpm
+sudo dnf --setopt=localpkg_gpgcheck=True install ./taskMaster-fedora-x86_64.rpm
+```
+
 #### Niri и Plasma Wayland
 
 Показать или скрыть оверлей можно из приложения, меню трея или командой `taskmaster --toggle-overlay`. При первом запуске с этим аргументом откроются оба окна. В Plasma назначьте пользовательское сочетание на эту команду через системные настройки клавиатуры. В Niri добавьте сочетание в существующий блок `binds` и правило для окна:

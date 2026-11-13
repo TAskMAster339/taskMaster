@@ -68,6 +68,25 @@ Workflow [CI](../.github/workflows/ci.yml) запускается при push и
 
 Каждый шаг с GitHub CLI получает `GH_TOKEN: ${{ github.token }}` через `env`, включая архивацию changelog ([аутентификация gh в Actions](https://cli.github.com/manual/gh_auth_login)). Если ошибка возникла на этом последнем шаге после публикации обоих релизов и отправки ветки `automation/archive-changelog-…`, откройте PR из уже созданной ветки в default branch по ссылке из лога, проверьте и влейте его. Повторная публикация для восстановления этого PR не нужна. Предупреждение Git о замене LF на CRLF не является причиной сбоя аутентификации.
 
+### Подпись Fedora RPM
+
+Создайте отдельный ключ OpenPGP для релизов с парольной фразой. Храните резервную копию приватного ключа в защищённом месте.
+
+```bash
+gpg --quick-generate-key "taskMaster RPM Releases" rsa3072 sign 2y
+gpg --list-secret-keys --fingerprint "taskMaster RPM Releases"
+```
+
+В настройках репозитория GitHub в разделе **Secrets and variables → Actions** задайте:
+
+- Секрет `RPM_SIGNING_KEY` с ASCII-экспортом приватного ключа из `gpg --armor --export-secret-keys <отпечаток>`.
+- Секрет `RPM_SIGNING_PASSPHRASE` с парольной фразой этого ключа.
+- Переменную `RPM_SIGNING_FINGERPRINT` с полным 40-символьным отпечатком.
+
+Ограничьте доступ к default branch и изменениям workflow: job подписания получает приватный ключ. Опубликуйте полный отпечаток в документации проекта по доверенному каналу перед первым подписанным выпуском. При смене ключа обновите отпечаток там же.
+
+Workflow проверяет подпись в отдельной RPM-базе перед публикацией. При ошибке подписания выпуск останавливается. Датированный релиз и `latest` содержат подписанный RPM и `RPM-GPG-KEY-taskMaster.asc`. [Справочник rpmsign](https://rpm.org/docs/6.1.x/man/rpmsign.1)
+
 ## Проверки
 
 Проверки из корня проекта: `npm test` — unit-тесты, `npm run test:browser` — браузерные сценарии и доступность, `npm run test:all` — оба набора. После `npm ci` установите браузер командой `npx playwright install chromium`. Браузерные тесты сами запускают временный Vite-сервер и закрывают его; рабочая SQLite-база не используется. Для сохранения снимков четырёх разделов в двух темах задайте `TASKMASTER_VISUAL_DIR` (путь к папке вне репозитория).
